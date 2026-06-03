@@ -1,0 +1,119 @@
+{
+  "strategy": "fallback",
+  "default_model": "deepseek-v4-flash",
+  "timeout": 30,
+  "max_retries": 2,
+  "providers": [
+    {
+      "name": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "compatibility": ["openai", "anthropic"],
+      "priority": 1,
+      "tags": ["cost", "thinking", "china"],
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "aliases": ["deepseek-chat"],
+          "context_window": 1000000,
+          "max_output": 8192,
+          "cost_input": 0.14,
+          "cost_output": 0.28,
+          "features": {"streaming": true, "thinking": true, "tool_calls": true}
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "aliases": ["deepseek-reasoner"],
+          "context_window": 1000000,
+          "max_output": 8192,
+          "cost_input": 0.44,
+          "cost_output": 0.87,
+          "features": {"streaming": true, "thinking": true, "tool_calls": true}
+        }
+      ]
+    },
+    {
+      "name": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "compatibility": ["openai"],
+      "priority": 2,
+      "tags": ["general", "vision"],
+      "models": [
+        {
+          "id": "gpt-4o-mini",
+          "context_window": 128000,
+          "max_output": 16384,
+          "cost_input": 0.15,
+          "cost_output": 0.60,
+          "features": {"streaming": true, "tool_calls": true, "vision": true}
+        }
+      ]
+    },
+    {
+      "name": "openrouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "compatibility": ["openai"],
+      "priority": 3,
+      "tags": ["aggregator", "fallback"],
+      "models": [
+        {
+          "id": "deepseek/deepseek-v4-flash",
+          "context_window": 1000000,
+          "max_output": 8192,
+          "cost_input": 0.14,
+          "cost_output": 0.28,
+          "features": {"streaming": true, "thinking": true}
+        },
+        {
+          "id": "google/gemini-2.0-flash-exp:free",
+          "aliases": ["gemini-flash-free"],
+          "context_window": 1000000,
+          "max_output": 8192,
+          "cost_input": 0,
+          "cost_output": 0,
+          "features": {"streaming": true}
+        }
+      ]
+    },
+    {
+      "name": "siliconflow",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_key_env": "SILICONFLOW_API_KEY",
+      "compatibility": ["openai"],
+      "priority": 4,
+      "tags": ["free", "china", "fallback"],
+      "models": [
+        {
+          "id": "deepseek-ai/DeepSeek-V3",
+          "aliases": ["deepseek-v3-sf"],
+          "context_window": 65536,
+          "max_output": 8192,
+          "cost_input": 0.0,
+          "cost_output": 0.0,
+          "features": {"streaming": true}
+        }
+      ]
+    },
+    {
+      "name": "ollama",
+      "base_url": "http://localhost:11434/v1",
+      "api_key_env": "NO_AUTH",
+      "api_key": "ollama",
+      "compatibility": ["openai"],
+      "priority": 10,
+      "tags": ["local", "free", "fallback"],
+      "models": [
+        {
+          "id": "llama3.2",
+          "context_window": 8192,
+          "max_output": 4096,
+          "cost_input": 0,
+          "cost_output": 0,
+          "features": {"streaming": true}
+        }
+      ]
+    }
+  ]
+}
