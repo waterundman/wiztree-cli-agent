@@ -18,6 +18,15 @@
   <a href="#"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"/></a>
 </p>
 
+<p align="center">
+  <a href="README.md">🇬🇧 English</a> &nbsp;|&nbsp;
+  <a href="README.zh-CN.md">🇨🇳 中文</a> &nbsp;|&nbsp;
+  <a href="README.fr-FR.md">🇫🇷 Français</a> &nbsp;|&nbsp;
+  <a href="README.de-DE.md">🇩🇪 Deutsch</a> &nbsp;|&nbsp;
+  <a href="README.ja-JP.md">🇯🇵 日本語</a> &nbsp;|&nbsp;
+  <a href="README.ru-RU.md">🇷🇺 Русский</a>
+</p>
+
 ---
 
 ## Project Overview
@@ -93,16 +102,8 @@ No API key? No problem. The built-in **RuleEngine** with 10 predefined cleanup r
 
 ## Screenshots
 
-> **Note**: Replace with actual screenshots before publishing.
-
-![WizTree CLI Agent](docs/screenshot.png)
-*Main window showing treemap visualization and scan results.*
-
-![Configuration Panel](docs/screenshot-config.png)
-*Configuration panel with LLM provider selection and scan options.*
-
-![Diff Preview](docs/screenshot-diff.png)
-*Diff preview dialog showing file details before deletion.*
+![WizTree CLI Agent Main Window](docs/screenshot.png)
+*Main window showing treemap visualization, scan controls, and analysis results.*
 
 ---
 
@@ -117,7 +118,7 @@ No API key? No problem. The built-in **RuleEngine** with 10 predefined cleanup r
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/wiztree-cli-agent.git
+git clone https://github.com/waterundman/wiztree-cli-agent.git
 cd wiztree-cli-agent
 
 # Install dependencies

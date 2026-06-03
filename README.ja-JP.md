@@ -5,6 +5,15 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#ライセンス)
 [![Tests](https://img.shields.io/badge/tests-366%20passed-brightgreen.svg)](#テスト)
 
+<p align="center">
+  <a href="README.md">🇬🇧 English</a> &nbsp;|&nbsp;
+  <a href="README.zh-CN.md">🇨🇳 中文</a> &nbsp;|&nbsp;
+  <a href="README.fr-FR.md">🇫🇷 Français</a> &nbsp;|&nbsp;
+  <a href="README.de-DE.md">🇩🇪 Deutsch</a> &nbsp;|&nbsp;
+  <b><a href="README.ja-JP.md">🇯🇵 日本語</a></b> &nbsp;|&nbsp;
+  <a href="README.ru-RU.md">🇷🇺 Русский</a>
+</p>
+
 > **WizTree CLI Agent** は、AI を活用したインテリジェントなディスククリーンアップアシスタントです。WizTree CLI ツールをラップし、複数の LLM プロバイダーを統合したルーティングシステムにより、安全で人間と対話しながらのファイルクリーンアップを実現します。
 
 ---

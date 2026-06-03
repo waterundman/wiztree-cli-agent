@@ -1,10 +1,19 @@
 # WizTree CLI Agent
 
-[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](https://github.com/anomalyco/wiztree-cli-agent)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](https://github.com/waterundman/wiztree-cli-agent)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-400%2B-passing-green.svg)](#测试)
 [![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-lightgrey.svg)]()
+
+<p align="center">
+  <a href="README.md">🇬🇧 English</a> &nbsp;|&nbsp;
+  <b><a href="README.zh-CN.md">🇨🇳 中文</a></b> &nbsp;|&nbsp;
+  <a href="README.fr-FR.md">🇫🇷 Français</a> &nbsp;|&nbsp;
+  <a href="README.de-DE.md">🇩🇪 Deutsch</a> &nbsp;|&nbsp;
+  <a href="README.ja-JP.md">🇯🇵 日本語</a> &nbsp;|&nbsp;
+  <a href="README.ru-RU.md">🇷🇺 Русский</a>
+</p>
 
 > **AI 驱动的磁盘清理助手** — 封装 WizTree CLI 工具，集成多 LLM Provider 路由系统，实现智能化的文件分析和安全的人机交互式文件清理。
 
@@ -140,7 +149,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/anomalyco/wiztree-cli-agent.git
+git clone https://github.com/waterundman/wiztree-cli-agent.git
 cd wiztree-cli-agent
 
 # 安装依赖
@@ -179,7 +188,7 @@ python app.py
 
 ### 预编译可执行文件 (Windows)
 
-从 [GitHub Releases](https://github.com/anomalyco/wiztree-cli-agent/releases) 页面下载：
+从 [GitHub Releases](https://github.com/waterundman/wiztree-cli-agent/releases) 页面下载：
 
 | 包类型 | 文件 | 说明 |
 |--------|------|------|
@@ -725,4 +734,4 @@ python build.py
 
 > **WizTree CLI Agent** — 让磁盘清理更智能、更安全、更高效。
 >
-> 项目主页: [https://github.com/anomalyco/wiztree-cli-agent](https://github.com/anomalyco/wiztree-cli-agent)
+> 项目主页: [https://github.com/waterundman/wiztree-cli-agent](https://github.com/waterundman/wiztree-cli-agent)

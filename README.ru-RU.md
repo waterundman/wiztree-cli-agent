@@ -6,6 +6,15 @@
 [![Tests](https://img.shields.io/badge/tests-400%2B%20passed-brightgreen.svg)](docs/TEST_REPORT.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
+<p align="center">
+  <a href="README.md">🇬🇧 English</a> &nbsp;|&nbsp;
+  <a href="README.zh-CN.md">🇨🇳 中文</a> &nbsp;|&nbsp;
+  <a href="README.fr-FR.md">🇫🇷 Français</a> &nbsp;|&nbsp;
+  <a href="README.de-DE.md">🇩🇪 Deutsch</a> &nbsp;|&nbsp;
+  <a href="README.ja-JP.md">🇯🇵 日本語</a> &nbsp;|&nbsp;
+  <b><a href="README.ru-RU.md">🇷🇺 Русский</a></b>
+</p>
+
 > **ИИ-ассистент для очистки дискового пространства** — обёртка над WizTree CLI с интеграцией нескольких LLM-провайдеров,
 > гибкой маршрутизацией запросов и безопасным удалением файлов через человеко-машинное взаимодействие.
 

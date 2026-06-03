@@ -5,6 +5,15 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-400%2B-brightgreen.svg)](tests/)
 
+<p align="center">
+  <a href="README.md">🇬🇧 English</a> &nbsp;|&nbsp;
+  <a href="README.zh-CN.md">🇨🇳 中文</a> &nbsp;|&nbsp;
+  <a href="README.fr-FR.md">🇫🇷 Français</a> &nbsp;|&nbsp;
+  <b><a href="README.de-DE.md">🇩🇪 Deutsch</a></b> &nbsp;|&nbsp;
+  <a href="README.ja-JP.md">🇯🇵 日本語</a> &nbsp;|&nbsp;
+  <a href="README.ru-RU.md">🇷🇺 Русский</a>
+</p>
+
 **KI-gestützter Datenträgerbereinigungsassistent** — Kapselt das WizTree-CLI-Tool ein und nutzt LLM-Analyse (Large Language Models) für eine sichere, interaktive Dateibereinigung mit menschlicher Kontrolle.
 
 > **Aktuelle Version: v1.5.0** — Dynamisches LLM-Routing (LatencyProbe + WeightedRouter), CLI-Scripting (Exit-Codes, JSON/CSV-Export), Batch-Scan, virtuelles Scrollen, Scan-Cache, 6 dunkle Designs, Tastenkürzel, Drag & Drop, Prüfprotokoll mit Wiederherstellung, Diff-Vorschau, Squarified-Treemap
