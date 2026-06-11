@@ -5,16 +5,17 @@ wiztree-cli-agent
 AI 驱动的磁盘清理助手 — 封装 WizTree CLI 工具，
 通过 LLM 分析实现安全的人机交互文件清理。
 
-v1.5.0 (2026-06-04)
+v1.7.3 (2026-06-05)
 -------------------
-CLI 增强 + 动态路由优化：
+文件管理增强 + UI 修复：
 
-* Stage 1 — LLM Router 动态路由（LatencyProbe + WeightedRouter + batch_chat + RequestCoalescer）
-* Stage 2 — CLI 脚本化（退出码 + --quiet/--json/--no-color + OutputFormatter）
-* Stage 3 — CLI 批量扫描 + 导出（--batch/--batch-file + JSON/CSV 导出）
-* Stage 4 — 集成测试 + CHANGELOG + 版本号升级
+* 修复设置面板显示在下层的 bug（添加 grab_set 模态窗口）
+* 实现文件数量动态调整逻辑：删除文件后根据大小载入新文件
+* 添加“下一轮”按钮功能，支持分批浏览文件
+* 优化文件池管理，保持显示数量恒定
 
-保留 v1.4.0 全部功能：
+保留 v1.5.0 全部功能：
+* CLI 增强 + 动态路由优化
 * 虚拟滚动 + 内存优化 + 扫描缓存
 * 加密凭据存储 + 3 级级联配置
 * LLM Router 扩展
@@ -23,4 +24,4 @@ CLI 增强 + 动态路由优化：
 * Diff 预览 + 审计日志 + 还原
 """
 
-__version__ = "1.5.0"
+__version__ = "1.7.3"

@@ -12,6 +12,16 @@ class SmoothProgressBar(ctk.CTkProgressBar):
         self.current_value = 0
         self.animation_speed = 0.1
 
+    def start_animation(self):
+        """启动不定模式动画"""
+        self.configure(mode="indeterminate")
+        self.start()
+
+    def stop_animation(self):
+        """停止不定模式动画"""
+        self.stop()
+        self.configure(mode="determinate")
+
     def set_smooth(self, value: float):
         """平滑设置进度"""
         self.target_value = value

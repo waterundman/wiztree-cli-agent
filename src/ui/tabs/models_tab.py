@@ -222,7 +222,7 @@ class ModelsTab:
                 try:
                     w.destroy()
                 except Exception:
-                    pass
+                    logger.debug("Failed to destroy card widget", exc_info=True)
 
         provider_key = _PROVIDER_NORMALIZE.get(self._provider.lower(), "all")
         try:
@@ -348,7 +348,7 @@ class ModelsTab:
             try:
                 self.frame.after_cancel(self._toast_after_id)
             except Exception:
-                pass
+                logger.debug("Failed to cancel toast timer", exc_info=True)
             self._toast_after_id = None
         try:
             self._toast_label.configure(
@@ -357,18 +357,19 @@ class ModelsTab:
             )
             self._toast_label.place(relx=0.5, rely=0.95, anchor="s")
         except Exception:  # pragma: no cover
+            logger.debug("Failed to show toast", exc_info=True)
             return
         try:
             self._toast_after_id = self.frame.after(2000, self._hide_toast)
         except Exception:
-            pass
+            logger.debug("Failed to set toast hide timer", exc_info=True)
 
     def _hide_toast(self) -> None:
         if self._toast_label is not None:
             try:
                 self._toast_label.place_forget()
             except Exception:
-                pass
+                logger.debug("Failed to hide toast", exc_info=True)
         self._toast_after_id = None
 
     def _set_status(self, text: str, color: str = "gray") -> None:
@@ -377,7 +378,7 @@ class ModelsTab:
         try:
             self._status_label.configure(text=text, text_color=color)
         except Exception:  # pragma: no cover
-            pass
+            logger.debug("Failed to set status label", exc_info=True)
 
     # ------------------------------------------------------------------
     # Stage 3 (v1.3.0): 骨架屏

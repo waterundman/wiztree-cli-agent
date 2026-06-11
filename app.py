@@ -5,7 +5,10 @@ Modular architecture version with LLM Router
 
 import sys
 import os
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 if not getattr(sys, 'frozen', False):
     sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -117,6 +120,28 @@ class WizTreeAgentApp:
         return True
 
 
+def _setup_crash_handler():
+    """安装全局 Tkinter 异常处理器，将崩溃信息写入日志文件"""
+    import traceback as _tb
+    from datetime import datetime as _dt
+    _crash_log = Path(__file__).parent / "crash.log"
+
+    def _report_callback_exception(_self, exc, val, tb):
+        msg = "".join(_tb.format_exception(exc, val, tb))
+        print(f"[CRASH] {msg}", file=sys.stderr, flush=True)
+        try:
+            with open(_crash_log, "a", encoding="utf-8") as f:
+                f.write(f"[{_dt.now()}] {msg}\n")
+        except Exception:
+            logger.debug("Failed to write to crash log", exc_info=True)
+
+    try:
+        import tkinter as _tk
+        _tk.Tk.report_callback_exception = _report_callback_exception
+    except Exception:
+        logger.debug("Failed to set tkinter crash handler", exc_info=True)
+
+
 def main():
     """主函数"""
     app = WizTreeAgentApp()
@@ -128,6 +153,7 @@ def main():
         # 尝试导入tkinter
         try:
             from src.ui import MainWindow
+            _setup_crash_handler()
             app.initialize()
             app.ui = MainWindow()
             app.ui.mainloop()
@@ -135,6 +161,17 @@ def main():
             print(f"GUI mode not available: {e}")
             print("Running in command line mode...")
             app.run_cli()
+        except Exception:
+            import traceback as _tb
+            from datetime import datetime as _dt
+            msg = "".join(_tb.format_exc())
+            print(f"[FATAL] {msg}", file=sys.stderr, flush=True)
+            _crash_log = Path(__file__).parent / "crash.log"
+            try:
+                with open(_crash_log, "a", encoding="utf-8") as f:
+                    f.write(f"[FATAL {_dt.now()}] {msg}\n")
+            except Exception:
+                logger.debug("Failed to write to crash log", exc_info=True)
 
 
 if __name__ == "__main__":

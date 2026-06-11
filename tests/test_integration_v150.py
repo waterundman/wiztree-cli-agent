@@ -258,7 +258,7 @@ class TestVersionContract:
     """版本号契约测试"""
 
     def test_version_is_150(self):
-        assert __version__ == "1.5.0"
+        assert __version__ == "1.7.3"
 
     def test_version_string_format(self):
         parts = __version__.split(".")

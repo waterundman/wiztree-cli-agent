@@ -446,7 +446,7 @@ class ModernTheme:
         try:
             style.theme_use("clam")
         except Exception:
-            pass
+            logger.debug("Failed to set ttk theme to 'clam'", exc_info=True)
 
         style.configure(
             "Treeview",
@@ -525,7 +525,7 @@ class ModernTheme:
             try:
                 ctk.set_appearance_mode(self.mode)
             except Exception:  # pragma: no cover
-                pass
+                logger.debug("Failed to set appearance mode", exc_info=True)
 
     def get_color(self, name: str) -> str:
         """获取颜色（v1.1.0 兼容 API）"""

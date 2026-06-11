@@ -1,8 +1,11 @@
 import os
+import logging
 from pathlib import Path
 from typing import Optional, Tuple
 import ctypes
 from ctypes import wintypes
+
+logger = logging.getLogger(__name__)
 
 
 class PathValidator:
@@ -100,6 +103,7 @@ class PathValidator:
                     return True
             return False
         except Exception:
+            logger.debug("Permission check failed for path: %s", path, exc_info=True)
             return False
     
     def _is_valid_scan_target(self, path: str) -> bool:

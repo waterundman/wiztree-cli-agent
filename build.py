@@ -53,6 +53,8 @@ def build_exe():
         '--hidden-import', 'src.ui.components',
         '--hidden-import', 'src.ui.animations',
         '--hidden-import', 'src.ui.themes',
+        '--hidden-import', 'src.utils.config_loader',
+        '--hidden-import', 'src.utils.credential_store',
         '--exclude-module', 'test',
         '--exclude-module', 'tests',
         '--exclude-module', 'pytest',

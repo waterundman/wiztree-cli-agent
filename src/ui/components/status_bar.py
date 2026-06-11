@@ -18,9 +18,12 @@ progresses.
 """
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 import customtkinter as ctk
+
+logger = logging.getLogger(__name__)
 
 try:
     import tkinter as tk  # noqa: F401  (CTkProgressBar uses Tcl under the hood)
@@ -144,18 +147,18 @@ class StatusBar(ctk.CTkFrame):
         except Exception:
             # Defensive: ctk may not be fully initialised in some
             # mocked test environments.
-            pass
+            logger.debug("Failed to configure status label", exc_info=True)
 
         clamped = max(0.0, min(1.0, float(progress)))
         try:
             self._progress.set(clamped)
         except Exception:
-            pass
+            logger.debug("Failed to set progress", exc_info=True)
         if color != self._current_color:
             try:
                 self._progress.configure(progress_color=color)
             except Exception:
-                pass
+                logger.debug("Failed to configure progress color", exc_info=True)
             self._current_color = color
 
     # ---------------------------------------------------------- convenience
@@ -166,7 +169,7 @@ class StatusBar(ctk.CTkFrame):
         try:
             self._progress.set(clamped)
         except Exception:
-            pass
+            logger.debug("Failed to set progress", exc_info=True)
 
     def current_state_label(self) -> str:
         """Return the current label text — handy for tests."""

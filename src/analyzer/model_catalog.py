@@ -288,7 +288,7 @@ class ModelCatalog:
             try:
                 resp.close()
             except Exception:  # pragma: no cover
-                pass
+                logger.debug("Failed to close HTTP response", exc_info=True)
 
     def _write_cache(self, payload: Any) -> None:
         try:

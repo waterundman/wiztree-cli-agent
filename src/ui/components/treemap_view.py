@@ -17,10 +17,13 @@ preserved verbatim so existing callers keep working.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import customtkinter as ctk
+
+logger = logging.getLogger(__name__)
 
 try:
     import tkinter as tk
@@ -176,13 +179,13 @@ class TreemapView(ctk.CTkFrame):
             try:
                 controller.set_on_path_change(self._on_path_change)
             except Exception:
-                pass
+                logger.debug("Failed to set on_path_change callback", exc_info=True)
             # Push the initial render so the view is in sync with
             # the controller's current path.
             try:
                 self._on_path_change(controller.current_path())
             except Exception:
-                pass
+                logger.debug("Failed to trigger initial path change", exc_info=True)
 
     @property
     def controller(self):
@@ -233,12 +236,13 @@ class TreemapView(ctk.CTkFrame):
         try:
             self._breadcrumb.configure(text=self._current_path or "(root)")
         except Exception:
-            pass
+            logger.debug("Failed to configure breadcrumb", exc_info=True)
         items: List[FileInfo] = []
         if self._controller is not None:
             try:
                 items = self._controller.get_children(self._current_path)
             except Exception:
+                logger.debug("Failed to get children from controller", exc_info=True)
                 items = []
         else:
             items = self._standalone_load(self._current_path)
@@ -256,6 +260,7 @@ class TreemapView(ctk.CTkFrame):
             try:
                 return [FileInfo.from_path(p, depth=0)]
             except Exception:
+                logger.debug("Failed to create FileInfo from path", exc_info=True)
                 return []
         try:
             children = list(p.iterdir())
@@ -266,6 +271,7 @@ class TreemapView(ctk.CTkFrame):
             try:
                 items.append(FileInfo.from_path(child, depth=0))
             except Exception:
+                logger.debug("Failed to create FileInfo for child", exc_info=True)
                 continue
         items.sort(key=lambda f: -f.size)
         return items
@@ -409,6 +415,7 @@ class TreemapView(ctk.CTkFrame):
             x_root = widget.winfo_rootx() + int(event.x)
             y_root = widget.winfo_rooty() + int(event.y)
         except Exception:
+            logger.debug("Failed to get widget position for tooltip", exc_info=True)
             return
         text = "{}\n{}".format(item.path, _format_size(item.size))
         if item.is_directory:
@@ -430,18 +437,20 @@ class TreemapView(ctk.CTkFrame):
                 )
                 self._tooltip_label.pack()
             except Exception:
+                logger.debug("Failed to create tooltip", exc_info=True)
                 self._tooltip = None
                 return
         else:
             try:
                 self._tooltip_label.configure(text=text)
             except Exception:
+                logger.debug("Failed to update tooltip text", exc_info=True)
                 return
         try:
             self._tooltip.wm_geometry("+{}+{}".format(x_root + 12, y_root + 12))
             self._tooltip.deiconify()
         except Exception:
-            pass
+            logger.debug("Failed to show tooltip", exc_info=True)
 
     def _hide_tooltip(self, event=None) -> None:  # noqa: ARG002
         if self._tooltip is None:
@@ -449,7 +458,7 @@ class TreemapView(ctk.CTkFrame):
         try:
             self._tooltip.withdraw()
         except Exception:
-            pass
+            logger.debug("Failed to hide tooltip", exc_info=True)
 
 
 __all__ = ['TreemapView']

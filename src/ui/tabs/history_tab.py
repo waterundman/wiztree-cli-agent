@@ -10,7 +10,7 @@ HistoryTab — 审计历史 + 还原标签页 (v1.2.0 / Stage 5)
     │ Search: [_______]  Type: [All ▾]  🔄 Refresh  📊 Stats         │  ← 顶栏 toolbar
     ├─────────────────────────────────────────────────────────────────┤
     │ ID │ Time                │ Action     │ Path     │ Status │ User │  ← 中部 tree
-    │ 12 │ 2026-06-01 18:21:33 │ file_delete│ C:\x.tmp │ success│ wxy  │
+    │ 12 │ 2026-06-01 18:21:33 │ file_delete│ C:\\x.tmp │ success│ wxy  │
     │ 11 │ 2026-06-01 18:20:00 │ scan       │ D:\      │ success│ wxy  │
     │ ...                                                              │
     ├─────────────────────────────────────────────────────────────────┤
@@ -250,6 +250,7 @@ class HistoryTab:
         try:
             self._search = (self._search_var.get() or "").strip()
         except Exception:
+            logger.debug("Failed to get search variable", exc_info=True)
             self._search = ""
         self._render_tree()
     
@@ -266,7 +267,7 @@ class HistoryTab:
             try:
                 self.restore_btn.configure(state="disabled")
             except Exception:
-                pass
+                logger.debug("Failed to disable restore button", exc_info=True)
             return
         item = self.tree.item(sel[0])
         values = item.get("values") or []
@@ -297,12 +298,12 @@ class HistoryTab:
                     try:
                         self.restore_btn.configure(state="normal")
                     except Exception:
-                        pass
+                        logger.debug("Failed to enable restore button", exc_info=True)
                 else:
                     try:
                         self.restore_btn.configure(state="disabled")
                     except Exception:
-                        pass
+                        logger.debug("Failed to disable restore button", exc_info=True)
         # else: keep restore disabled
     
     def _on_restore_click(self) -> None:
@@ -372,7 +373,7 @@ class HistoryTab:
                 if r.get("id") == action_id:
                     return r
         except Exception:
-            logger.exception("find_record_by_id failed")
+            logger.warning("find_record_by_id failed", exc_info=True)
         return None
     
     def _render_tree(self) -> None:
@@ -381,6 +382,7 @@ class HistoryTab:
             for item in self.tree.get_children():
                 self.tree.delete(item)
         except Exception:
+            logger.debug("Failed to clear tree items", exc_info=True)
             return
         
         records = self._load_records()
@@ -435,7 +437,7 @@ class HistoryTab:
             try:
                 self._stats_window.destroy()
             except Exception:
-                pass
+                logger.debug("Failed to destroy stats window", exc_info=True)
             self._stats_window = None
         
         win = ctk.CTkToplevel(self.frame)
@@ -444,7 +446,7 @@ class HistoryTab:
         try:
             win.grab_set()
         except Exception:
-            pass
+            logger.debug("Failed to grab focus for stats window", exc_info=True)
         self._stats_window = win
         win.protocol("WM_DELETE_WINDOW", lambda: self._close_stats(win))
         
@@ -469,7 +471,7 @@ class HistoryTab:
         try:
             win.destroy()
         except Exception:
-            pass
+            logger.debug("Failed to destroy stats window", exc_info=True)
         if self._stats_window is win:
             self._stats_window = None
     
@@ -482,7 +484,7 @@ class HistoryTab:
         try:
             self._status_label.configure(text=text, text_color=color)
         except Exception:
-            pass
+            logger.debug("Failed to set status label", exc_info=True)
     
     def _set_detail_text(self, text: str) -> None:
         if self._detail_box is None:
@@ -493,7 +495,7 @@ class HistoryTab:
             self._detail_box.insert("1.0", text)
             self._detail_box.configure(state="disabled")
         except Exception:
-            pass
+            logger.debug("Failed to set detail text", exc_info=True)
     
     def show_toast(self, message: str, *, error: bool = False) -> None:
         if self._toast is None:
@@ -502,7 +504,7 @@ class HistoryTab:
             try:
                 self.frame.after_cancel(self._toast_after_id)
             except Exception:
-                pass
+                logger.debug("Failed to cancel toast timer", exc_info=True)
             self._toast_after_id = None
         try:
             self._toast.configure(
@@ -511,18 +513,19 @@ class HistoryTab:
             )
             self._toast.place(relx=0.5, rely=0.95, anchor="s")
         except Exception:
+            logger.debug("Failed to show toast", exc_info=True)
             return
         try:
             self._toast_after_id = self.frame.after(2500, self._hide_toast)
         except Exception:
-            pass
+            logger.debug("Failed to set toast hide timer", exc_info=True)
     
     def _hide_toast(self) -> None:
         if self._toast is not None:
             try:
                 self._toast.place_forget()
             except Exception:
-                pass
+                logger.debug("Failed to hide toast", exc_info=True)
         self._toast_after_id = None
 
 

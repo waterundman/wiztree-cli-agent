@@ -854,7 +854,7 @@ class TestVersionContract:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
         assert hasattr(mod, "__version__"), "src/__init__.py must define __version__"
-        assert mod.__version__ == "1.5.0"
+        assert mod.__version__ == "1.7.3"
 
     def test_requirements_has_v120_dependencies(self):
         """requirements.txt must include all v1.2.0 runtime deps."""

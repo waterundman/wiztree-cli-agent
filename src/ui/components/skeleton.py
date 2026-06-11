@@ -12,11 +12,14 @@ replaced by real content once loading completes.
 """
 from __future__ import annotations
 
+import logging
 import math
 import time
 from typing import Optional
 
 import customtkinter as ctk
+
+logger = logging.getLogger(__name__)
 
 # Default skeleton grey (used when no theme is available)
 _DEFAULT_SKELETON_COLOR = "#3a3a3a"
@@ -37,6 +40,7 @@ def _get_theme_skeleton_color() -> str:
             fg = fg[1] if len(fg) > 1 else fg[0]
         return fg  # type: ignore[return-value]
     except Exception:
+        logger.warning("Theme skeleton color lookup failed, using default", exc_info=True)
         return _DEFAULT_SKELETON_COLOR
 
 
@@ -104,17 +108,17 @@ class SkeletonWidget(ctk.CTkFrame):
             try:
                 self.after_cancel(self._after_id)
             except Exception:  # pragma: no cover — defensive
-                pass
+                logger.warning("SkeletonWidget after_cancel failed", exc_info=True)
             self._after_id = None
         # Hide using whichever geometry manager was used
         try:
             self.pack_forget()
         except Exception:
-            pass
+            logger.warning("SkeletonWidget pack_forget failed", exc_info=True)
         try:
             self.grid_forget()
         except Exception:
-            pass
+            logger.warning("SkeletonWidget grid_forget failed", exc_info=True)
 
     @property
     def is_running(self) -> bool:
@@ -194,4 +198,4 @@ class SkeletonLine(ctk.CTkFrame):
                 target = int(parent_w * self._width_ratio)
                 self.configure(width=target)
         except Exception:  # pragma: no cover — defensive
-            pass
+            logger.warning("SkeletonLine resize update failed", exc_info=True)

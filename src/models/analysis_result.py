@@ -22,6 +22,7 @@ class DeletionRecommendation:
     risk_level: RiskLevel
     confidence: float  # 0-1
     potential_savings: int  # 字节
+    selected: bool = False
     
     @property
     def potential_savings_human_readable(self) -> str:

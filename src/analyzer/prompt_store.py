@@ -42,6 +42,33 @@ class PromptStoreError(OSError):
 # ---------------------------------------------------------------------------
 # 路径工具
 # ---------------------------------------------------------------------------
+DEFAULT_PROMPTS = {
+    "default_scan": (
+        "analyze_scan",
+        "You are a disk cleanup assistant. Analyze these files and identify:\n"
+        "1. Temporary files that can be safely deleted\n"
+        "2. Cache files no longer needed\n"
+        "3. Old log files that can be archived\n"
+        "4. Large files that may be forgotten\n\n"
+        "Scan Results:\n{scan_results}"
+    ),
+    "analyze_logs": (
+        "log_analysis",
+        "You are a log analysis expert. Examine these log files:\n\n"
+        "{log_files}\n\n"
+        "Recommend which logs can be safely deleted or archived."
+    ),
+    "deep_cleanup": (
+        "deep_analysis",
+        "You are a thorough disk cleaner. For each file below, provide:\n"
+        "1. Risk level (LOW/MEDIUM/HIGH/CRITICAL)\n"
+        "2. Reason for deletion recommendation\n"
+        "3. Estimated space savings\n\n"
+        "Files:\n{files}"
+    ),
+}
+
+
 def _default_prompts_dir() -> Path:
     return Path.home() / ".wiztree-cli-agent" / "prompts"
 
@@ -102,9 +129,25 @@ class PromptStore:
         except OSError as e:
             raise PromptStoreError(f"cannot create prompts dir: {e}") from e
 
+        if prompts_dir is None:
+            self._seed_defaults()
+
     # ------------------------------------------------------------------
     # 内部：ConfigLoader 懒加载
     # ------------------------------------------------------------------
+    def _seed_defaults(self) -> None:
+        """Seed empty prompts directory with default templates on first run."""
+        if not self._dir.is_dir():
+            return
+        if any(p.is_file() and p.suffix == ".txt" for p in self._dir.iterdir()):
+            return
+        with self._lock:
+            for _key, (name, content) in DEFAULT_PROMPTS.items():
+                path = self._dir / f"{name}.txt"
+                try:
+                    path.write_text(content, encoding="utf-8")
+                except OSError as e:
+                    logger.warning("seed default prompt %s failed: %s", name, e)
     def _get_config(self) -> Any:
         if self._config_loader is None:
             try:

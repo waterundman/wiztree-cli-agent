@@ -190,21 +190,28 @@ class PromptsTab:
                 try:
                     w.destroy()
                 except Exception:
-                    pass
-            for name in names:
-                btn = ctk.CTkButton(
-                    self._list_frame, text=name, anchor="w",
-                    fg_color="transparent", hover_color="#3a3a4a",
-                    command=lambda n=name: self._on_pick(n),
-                )
-                btn.pack(fill="x", padx=2, pady=1)
+                    logger.debug("Failed to destroy list widget", exc_info=True)
+            if not names:
+                ctk.CTkLabel(
+                    self._list_frame,
+                    text="No prompts yet.\nClick + New to create one.",
+                    text_color="#6b6b7b", justify="center",
+                ).pack(fill="x", padx=8, pady=20)
+            else:
+                for name in names:
+                    btn = ctk.CTkButton(
+                        self._list_frame, text=name, anchor="w",
+                        fg_color="transparent", hover_color="#3a3a4a",
+                        command=lambda n=name: self._on_pick(n),
+                    )
+                    btn.pack(fill="x", padx=2, pady=1)
 
         # 2) active 菜单
         values = [self.PLACEHOLDER_NEW] + names
         try:
             self._active_menu.configure(values=values)
         except Exception:  # pragma: no cover
-            pass
+            logger.debug("Failed to configure active menu", exc_info=True)
         active = self._store.get_active() or ""
         try:
             self._active_var.set(active if active in names else "")
@@ -233,7 +240,7 @@ class PromptsTab:
             self._editor.delete("1.0", "end")
             self._editor.insert("1.0", content)
         except Exception:
-            pass
+            logger.debug("Failed to update editor content", exc_info=True)
         self._set_dirty(False)
 
     def _on_active_select(self, value: str) -> None:
@@ -282,7 +289,7 @@ class PromptsTab:
             self._name_label.configure(text=name)
             self._editor.delete("1.0", "end")
         except Exception:
-            pass
+            logger.debug("Failed to clear editor for new prompt", exc_info=True)
         self._set_dirty(True)
         self.refresh()
         self.show_toast(f"✓ Created '{name}' — write content and Save")
@@ -294,6 +301,7 @@ class PromptsTab:
         try:
             content = self._editor.get("1.0", "end-1c")
         except Exception:
+            logger.debug("Failed to get editor content", exc_info=True)
             content = ""
         try:
             self._store.set(self._current_name, content)
@@ -323,7 +331,7 @@ class PromptsTab:
             self._name_label.configure(text="(none)")
             self._editor.delete("1.0", "end")
         except Exception:
-            pass
+            logger.debug("Failed to clear editor after delete", exc_info=True)
         self._set_dirty(False)
         self.show_toast(f"🗑 Deleted '{name}'")
         self.refresh()
@@ -340,7 +348,7 @@ class PromptsTab:
         try:
             self._dirty_label.configure(text="● unsaved" if self._dirty else "")
         except Exception:
-            pass
+            logger.debug("Failed to set dirty label", exc_info=True)
 
     def show_toast(self, message: str, *, error: bool = False) -> None:
         if self._toast is None:
@@ -349,7 +357,7 @@ class PromptsTab:
             try:
                 self.frame.after_cancel(self._toast_after_id)
             except Exception:
-                pass
+                logger.debug("Failed to cancel toast timer", exc_info=True)
             self._toast_after_id = None
         try:
             self._toast.configure(
@@ -358,18 +366,19 @@ class PromptsTab:
             )
             self._toast.place(relx=0.5, rely=0.95, anchor="s")
         except Exception:  # pragma: no cover
+            logger.debug("Failed to show toast", exc_info=True)
             return
         try:
             self._toast_after_id = self.frame.after(2000, self._hide_toast)
         except Exception:
-            pass
+            logger.debug("Failed to set toast hide timer", exc_info=True)
 
     def _hide_toast(self) -> None:
         if self._toast is not None:
             try:
                 self._toast.place_forget()
             except Exception:
-                pass
+                logger.debug("Failed to hide toast", exc_info=True)
         self._toast_after_id = None
 
     def _fire_active_cb(self, name: Optional[str]) -> None:

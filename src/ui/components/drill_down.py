@@ -10,11 +10,14 @@ without changing this class.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from ...models.file_info import FileInfo
+
+logger = logging.getLogger(__name__)
 
 PathLoader = Callable[[str], List[FileInfo]]
 PathChangeCallback = Callable[[str], None]
@@ -47,6 +50,7 @@ def _default_loader(path: str, max_items: int = _DEFAULT_MAX_ITEMS) -> List[File
         try:
             return [FileInfo.from_path(p, depth=0)]
         except Exception:
+            logger.debug("Failed to create FileInfo from path", exc_info=True)
             return []
     try:
         children = list(p.iterdir())
@@ -57,6 +61,7 @@ def _default_loader(path: str, max_items: int = _DEFAULT_MAX_ITEMS) -> List[File
         try:
             items.append(FileInfo.from_path(child, depth=0))
         except Exception:
+            logger.debug("Failed to create FileInfo for child", exc_info=True)
             continue
     items.sort(key=lambda f: -f.size)
     return items[:max_items]
@@ -191,6 +196,7 @@ class DrillDownController:
             try:
                 return list(self._data_loader(path))
             except Exception:
+                logger.debug("Data loader failed for path: %s", path, exc_info=True)
                 return []
         return _default_loader(path)
 
@@ -232,7 +238,7 @@ class DrillDownController:
             try:
                 cb(path)
             except Exception:
-                pass
+                logger.debug("Path change callback failed", exc_info=True)
             return
 
         def _work() -> None:
@@ -246,16 +252,17 @@ class DrillDownController:
                 else:
                     _default_loader(path)
             except Exception:
-                pass
+                logger.debug("Background loader failed for path: %s", path, exc_info=True)
             try:
                 master.after(0, cb, path)
             except Exception:
                 # Master may have been destroyed (window closed); fall
                 # back to a best-effort synchronous call.
+                logger.debug("master.after failed, falling back to sync call", exc_info=True)
                 try:
                     cb(path)
                 except Exception:
-                    pass
+                    logger.debug("Fallback sync callback also failed", exc_info=True)
 
         threading.Thread(target=_work, daemon=True).start()
 

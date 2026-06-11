@@ -1,3 +1,4 @@
+import logging
 import os
 import csv
 import json
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Generator
 from datetime import datetime, timedelta
 
+logger = logging.getLogger(__name__)
+
 try:
     from ..models.file_info import FileInfo
     from ..models.scan_result import ScanResult
@@ -16,7 +19,8 @@ try:
     from .path_validator import PathValidator
     from .scan_progress import ScanProgress, ScanStatus
     from .interface import ScannerInterface
-except ImportError:
+except ImportError as _e:
+    logger.debug("Relative import failed (%s), falling back to absolute imports", _e)
     from models.file_info import FileInfo
     from models.scan_result import ScanResult
     from scanner.options import ScanOptions
@@ -125,7 +129,7 @@ class WizTreeScanner(ScannerInterface):
                 try:
                     os.remove(csv_path)
                 except OSError:
-                    pass
+                    logger.debug("Failed to remove temp CSV: %s", csv_path)
     
     def cancel(self):
         """取消扫描"""
@@ -142,7 +146,7 @@ class WizTreeScanner(ScannerInterface):
                 try:
                     self._process.kill()
                 except Exception:
-                    pass
+                    logger.warning("WizTree process kill failed", exc_info=True)
     
     def _build_command(self, target: str, options: ScanOptions) -> List[str]:
         """
@@ -275,6 +279,7 @@ class WizTreeScanner(ScannerInterface):
                                     files_scanned=file_count
                                 )
                     except Exception:
+                        logger.debug("CSV row %d parse error, skipping", row_num, exc_info=True)
                         # 跳过解析错误的行
                         continue
                         
@@ -330,6 +335,7 @@ class WizTreeScanner(ScannerInterface):
             )
             
         except Exception:
+            logger.debug("Failed to parse CSV row: %s", row, exc_info=True)
             return None
     
     def _parse_datetime(self, datetime_str: str) -> datetime:
@@ -366,6 +372,7 @@ class WizTreeScanner(ScannerInterface):
             return datetime.now()
             
         except Exception:
+            logger.debug("Datetime parse failed for '%s', using current time", datetime_str, exc_info=True)
             return datetime.now()
     
     def _build_scan_result(
@@ -483,7 +490,7 @@ class WizTreeScanner(ScannerInterface):
                         files_scanned=cached.total_files,
                     ))
                 except Exception:
-                    pass
+                    logger.warning("Cache progress callback failed", exc_info=True)
             return cached
 
         result = self.scan(target, options)
@@ -547,7 +554,7 @@ class WizTreeScanner(ScannerInterface):
             with open(self._CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
         except OSError:
-            pass
+            logger.warning("Failed to save scan cache to %s", self._CACHE_FILE, exc_info=True)
 
     @staticmethod
     def _serialize_scan_result(result: ScanResult) -> Dict[str, Any]:

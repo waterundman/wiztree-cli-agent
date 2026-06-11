@@ -32,16 +32,16 @@ except ImportError:  # pragma: no cover - 环境探测
     _CTK_AVAILABLE = False
 
 
-# 6 个主题名（预留；customtkinter 内建支持 blue/green/dark-blue，
-# 其余 3 个为扩展位，待 Stage 4 theme 实现）
-THEME_NAMES: List[str] = [
-    "blue",
-    "green",
-    "dark-blue",
-    "dark-green",
-    "light",
-    "system",
-]
+def _load_theme_names() -> List[str]:
+    """加载可用主题名（优先 ModernTheme，回退 CTk 内建）"""
+    try:
+        from src.ui.themes.modern_theme import ModernTheme
+        return ModernTheme.list_themes()
+    except Exception:
+        return ["blue", "green", "dark-blue", "dark-green", "light", "system"]
+
+
+THEME_NAMES: List[str] = _load_theme_names()
 
 
 class SettingsDialog:
@@ -81,21 +81,10 @@ class SettingsDialog:
                 "customtkinter / tkinter 不可用，无法实例化 SettingsDialog"
             )
 
-        # 解析依赖（延迟 import 避免循环）
-        from .config_loader import ConfigLoader
-        from .credential_store import CredentialStore
-
+        from src.utils.config_loader import ConfigLoader
         self._config: ConfigLoader = config_loader or ConfigLoader.get_instance()
-        self._credentials: CredentialStore = credential_store or CredentialStore()
         self._on_close_cb = on_close
-
-        # 真正创建 ctk.CTkToplevel 子窗口
-        self.window: "ctk.CTkToplevel" = ctk.CTkToplevel(master)
-        self.window.title("Settings — wiztree-cli-agent")
-        self.window.geometry("640x720")
-        self.window.minsize(560, 600)
-        self.window.transient(master)
-        self.window.grab_set()
+        self._credentials: Optional[Any] = credential_store
 
         # 状态
         self._api_key_entries: Dict[str, Any] = {}
@@ -104,20 +93,26 @@ class SettingsDialog:
         self._provider_entries: Dict[str, Any] = {}
         self._status_label: Any = None
 
-        self._build_ui()
-        self._load_existing()
-
+        # 创建窗口
+        self.window: "ctk.CTkToplevel" = ctk.CTkToplevel(master)
+        self.window.title("Settings — wiztree-cli-agent")
+        self.window.geometry("640x720")
+        self.window.minsize(560, 600)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.window.lift()
+        self.window.focus_force()
+        self.window.grab_set()  # 设置为模态窗口，确保显示在前台
+
+        self._build_ui()
+
+        # 延迟加载配置和凭据，避免阻塞 UI 线程
+        self.window.after(50, self._load_existing)
+        self.window.after(100, self._load_credentials_async)
 
     # ------------------------------------------------------------------
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        try:
-            ctk.set_appearance_mode(self._config.get("ui.appearance_mode", "system"))
-        except Exception:  # pragma: no cover
-            pass
-
         # 滚动容器（设置项可能很多）
         outer = ctk.CTkScrollableFrame(self.window, label_text="")
         outer.pack(fill="both", expand=True, padx=12, pady=12)
@@ -171,7 +166,12 @@ class SettingsDialog:
         theme_row = ctk.CTkFrame(outer, fg_color="transparent")
         theme_row.pack(fill="x", padx=4, pady=4)
         ctk.CTkLabel(theme_row, text="Theme", width=120, anchor="w").pack(side="left")
-        self._theme_var = ctk.StringVar(value=self._config.get("ui.theme", "blue"))
+        try:
+            from src.ui.themes.modern_theme import ModernTheme
+            current = ModernTheme.get_current()
+        except Exception:
+            current = self._config.get("ui.theme", "GitHub Dark")
+        self._theme_var = ctk.StringVar(value=current if current in THEME_NAMES else THEME_NAMES[0])
         ctk.CTkOptionMenu(
             theme_row, values=THEME_NAMES, variable=self._theme_var, width=200,
         ).pack(side="left", padx=8)
@@ -226,39 +226,79 @@ class SettingsDialog:
         )
 
     # ------------------------------------------------------------------
-    # 数据加载 / 保存
+    # 凭据加载（异步，避免主线程冻结）
     # ------------------------------------------------------------------
+    def _load_credentials_async(self) -> None:
+        if self._credentials is not None:
+            self._load_existing()
+            return
+
+        for entry in self._api_key_entries.values():
+            entry.configure(placeholder_text="(loading...)")
+
+        def _init_credential_store():
+            try:
+                from src.utils.credential_store import CredentialStore, CredentialStoreError
+                store = CredentialStore()
+                self._credentials = store
+            except CredentialStoreError:
+                self._credentials = None
+            except Exception:
+                self._credentials = None
+            self.window.after(0, self._load_existing)
+
+        threading.Thread(target=_init_credential_store, daemon=True).start()
+
     def _load_existing(self) -> None:
         """加载已存储的 API Key（仅显示 •，不反显明文）"""
+        if self._credentials is None:
+            for provider, entry in self._api_key_entries.items():
+                saved = self._config.get(f"api_keys.{provider}", "")
+                if saved:
+                    entry.configure(placeholder_text=f"(set, {len(saved)} chars)")
+                else:
+                    entry.configure(placeholder_text="(not set)")
+            return
         for provider, entry in self._api_key_entries.items():
             existing = self._credentials.get_api_key(provider)
             if existing:
-                # 用占位符表示「已设置」但不明文显示
-                entry.configure(placeholder_text=f"•••• (set, {len(existing)} chars)")
+                entry.configure(placeholder_text=f"(set, {len(existing)} chars)")
             else:
                 entry.configure(placeholder_text="(not set)")
 
+    # ------------------------------------------------------------------
+    # 数据加载 / 保存
+    # ------------------------------------------------------------------
     def _save_api_key(self, provider: str, entry: Any) -> None:
         key = entry.get().strip()
         if not key:
             self._set_status(f"Key for {provider} is empty — nothing saved", "orange")
             return
-        try:
-            self._credentials.store_api_key(provider, key)
-            self._set_status(f"Saved {provider} key to OS keyring", "green")
-            # 清空输入框，避免明文长时间停留
-            entry.delete(0, "end")
-            self._load_existing()
-        except Exception as e:  # pragma: no cover - 取决于后端
-            self._set_status(f"Save failed: {e}", "red")
+        if self._credentials is not None:
+            try:
+                self._credentials.store_api_key(provider, key)
+                self._set_status(f"Saved {provider} key to OS keyring", "green")
+            except Exception as e:
+                self._set_status(f"Save failed: {e}", "red")
+                return
+        else:
+            # keyring 不可用，回退到配置文件存储
+            self._config.set(f"api_keys.{provider}", key)
+            self._set_status(f"Saved {provider} key to config", "green")
+        entry.delete(0, "end")
+        self._load_existing()
 
     def _clear_api_key(self, provider: str) -> None:
-        try:
-            self._credentials.delete_api_key(provider)
-            self._set_status(f"Cleared {provider} key", "green")
-            self._load_existing()
-        except Exception as e:  # pragma: no cover
-            self._set_status(f"Clear failed: {e}", "red")
+        if self._credentials is not None:
+            try:
+                self._credentials.delete_api_key(provider)
+                self._set_status(f"Cleared {provider} key", "green")
+            except Exception as e:
+                self._set_status(f"Clear failed: {e}", "red")
+        else:
+            self._config.set(f"api_keys.{provider}", "")
+            self._set_status(f"Cleared {provider} key from config", "green")
+        self._load_existing()
 
     def _save_all(self) -> None:
         try:
@@ -290,7 +330,7 @@ class SettingsDialog:
             try:
                 self.window.grab_release()
             except Exception:  # pragma: no cover
-                pass
+                logger.debug("Failed to release grab on settings dialog close", exc_info=True)
             self.window.destroy()
 
     def _set_status(self, text: str, color: str = "gray") -> None:

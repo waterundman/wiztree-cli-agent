@@ -78,6 +78,15 @@ class VirtualTreeview(ttk.Treeview):
 
     def _on_configure(self, event: Any) -> None:
         """窗口大小变化时刷新。"""
+        curr_w = event.width if hasattr(event, "width") else 0
+        curr_h = event.height if hasattr(event, "height") else 0
+        if "_last_cfg_w" not in self.__dict__:
+            self._last_cfg_w = 0
+            self._last_cfg_h = 0
+        if curr_w == self._last_cfg_w and curr_h == self._last_cfg_h:
+            return
+        self._last_cfg_w = curr_w
+        self._last_cfg_h = curr_h
         self._update_visible_range()
         self._render_visible_rows()
 

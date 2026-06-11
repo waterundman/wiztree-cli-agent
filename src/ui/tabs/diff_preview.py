@@ -17,7 +17,7 @@ DiffPreviewDialog — Before/After 差异预览对话框 (v1.2.0 / Stage 5)
     │ Preview: delete                                       │
     ├──────────────────────────────────────────────────────┤
     │ Before:                                                │
-    │   Path    : C:\Users\me\a.txt                        │
+    │   Path    : C:\\Users\\me\\a.txt                        │
     │   Size    : 12.4 KB                                   │
     │   Modified: 2026-05-31 14:22:11                       │
     │                                                       │
@@ -156,11 +156,11 @@ class DiffPreviewDialog:
         try:
             self.top.grab_set()
         except Exception:
-            pass
+            logger.debug("Failed to grab focus for diff preview dialog", exc_info=True)
         try:
             self.top.focus_set()
         except Exception:
-            pass
+            logger.debug("Failed to set focus for diff preview dialog", exc_info=True)
         
         # 关窗协议
         self.top.protocol("WM_DELETE_WINDOW", self._on_cancel)
@@ -270,11 +270,11 @@ class DiffPreviewDialog:
         try:
             self.top.grab_release()
         except Exception:
-            pass
+            logger.debug("Failed to release grab for diff preview dialog", exc_info=True)
         try:
             self.top.destroy()
         except Exception:
-            pass
+            logger.debug("Failed to destroy diff preview dialog", exc_info=True)
     
     # ------------------------------------------------------------------
     # 公共 API
@@ -291,7 +291,7 @@ class DiffPreviewDialog:
             self.top.wait_window()
         except Exception:
             # 若 wait_window 失败（例如已销毁），返回当前 result
-            pass
+            logger.debug("wait_window failed (dialog may have been destroyed)", exc_info=True)
         return bool(self.result)
 
 

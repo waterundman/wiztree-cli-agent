@@ -39,7 +39,7 @@ from src.analyzer.llm_router import (
 
 def _make_provider(name="test", priority=1, models=None, api_key="fake-key"):
     if models is None:
-        models = [ModelConfig(id="test-model")]
+        models = [ModelConfig(id="test-model", aliases=["deepseek-v4-flash"])]
     return ProviderConfig(
         name=name,
         base_url="https://example.com/v1",
@@ -430,11 +430,11 @@ class TestBatchChat:
 
     @patch("src.analyzer.llm_router.OpenAI")
     def test_batch_partial_failure(self, mock_openai_class):
-        call_count = [0]
+        fail_content = "q1"
 
         def side_effect(**kwargs):
-            call_count[0] += 1
-            if call_count[0] == 2:
+            msg_content = kwargs.get("messages", [{}])[0].get("content", "")
+            if msg_content == fail_content:
                 raise RuntimeError("fail on 2nd")
             return _mock_response("ok")
 
@@ -487,13 +487,18 @@ class TestBatchChat:
         requests = [
             BatchRequest(
                 messages=[{"role": "user", "content": "q1"}],
-                model="custom-model",
+                model="test-model",
                 temperature=0.3,
                 max_tokens=100,
             )
         ]
         results = batch_chat(router, requests)
         assert results[0].success
+
+        # Verify custom params were passed to the API call
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["temperature"] == 0.3
+        assert call_kwargs["max_tokens"] == 100
 
 
 # ============================================================

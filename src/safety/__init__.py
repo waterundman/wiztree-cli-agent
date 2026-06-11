@@ -208,6 +208,19 @@ class ComprehensiveSafetyManager(NewSafetyInterface):
             deletion_status=status,
             error_message=error_message
         )
+        
+        self.audit_logger.log(
+            action_type="file_delete",
+            target_path=file_path,
+            status=status,
+            metadata={
+                "file_name": file_name,
+                "file_size": file_size,
+                "file_type": file_type,
+                "parent_directory": parent_directory,
+                "error_message": error_message,
+            },
+        )
     
     def get_safety_rules(self) -> List[str]:
         """

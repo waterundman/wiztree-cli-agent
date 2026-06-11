@@ -2,6 +2,7 @@
 import logging
 import customtkinter as ctk
 import tkinter.ttk as ttk
+from tkinter import filedialog
 import threading
 import os
 from typing import Optional, List, Dict, Any
@@ -18,19 +19,8 @@ from src.models import FileInfo, ScanResult
 from src.ui.animations.smooth_progress import SmoothProgressBar, SpinnerLabel
 from src.ui.components.skeleton import SkeletonWidget, SkeletonLine
 from src.ui.components.virtual_treeview import VirtualTreeview
-from src.ui.tabs.models_tab import ModelsTab
-from src.ui.tabs.prompts_tab import PromptsTab
 
 logger = logging.getLogger(__name__)
-
-# Stage 5 (v1.2.0): History 标签页（审计 + 还原）— 优雅降级
-try:
-    from src.ui.tabs.history_tab import HistoryTab
-    _HISTORY_TAB_AVAILABLE = True
-except ImportError:
-    HistoryTab = None  # type: ignore
-    _HISTORY_TAB_AVAILABLE = False
-    logger.warning("HistoryTab 不可用 — 审计历史标签已禁用 (Stage 5 优雅降级)")
 
 # Stage 4 (v1.2.0): tkinterdnd2 拖放支持 — 优雅降级
 try:
@@ -73,6 +63,13 @@ class MainWindow(ctk.CTk):
         self.rule_engine = RuleEngine()
         self.scan_result = None
         self.recommendations = []
+        self._llm_router = None
+        
+        # 文件池：存储扫描结果，用于动态调整显示数量
+        self._file_pool = []  # 所有扫描结果（按大小排序）
+        self._display_count = 50  # 当前显示的文件数量
+        self._batch_size = 50  # 每批显示的文件数量
+        self._current_batch = 0  # 当前批次（从0开始）
 
         # 初始化UI
         self.setup_ui()
@@ -101,7 +98,7 @@ class MainWindow(ctk.CTk):
                 ctk.set_appearance_mode("dark")
                 ctk.set_default_color_theme("blue")
             except Exception:  # pragma: no cover
-                pass
+                logger.warning("Fallback theme apply failed", exc_info=True)
 
     def _on_theme_changed(self, theme_name: str) -> None:
         """Stage 3 (v1.3.0): 主题切换回调 — 更新 ttk 样式和骨架屏颜色。"""
@@ -161,7 +158,7 @@ class MainWindow(ctk.CTk):
                 scope_entry.delete(0, "end")
                 scope_entry.insert(0, target)
             except Exception:  # pragma: no cover
-                pass
+                logger.warning("DnD scope entry update failed", exc_info=True)
             if hasattr(self, "update_status"):
                 self.update_status(f"📂 Dropped: {target}", "green")
         except Exception as e:  # pragma: no cover
@@ -232,7 +229,7 @@ class MainWindow(ctk.CTk):
                 if state == "disabled":
                     return
             except Exception:  # pragma: no cover
-                pass
+                logger.warning("Scan button state check failed", exc_info=True)
         self.start_scan()
 
     def _clear_results(self):
@@ -245,7 +242,7 @@ class MainWindow(ctk.CTk):
                 for item in tree.get_children():
                     tree.delete(item)
             except Exception:  # pragma: no cover
-                pass
+                logger.warning("Tree delete items failed", exc_info=True)
         self.recommendations = []
         self.scan_result = None
         if hasattr(self, "stats_labels"):
@@ -257,15 +254,13 @@ class MainWindow(ctk.CTk):
                                   else ("0 B" if key == "total_size" else "0.0s"))
                         )
             except Exception:  # pragma: no cover
-                pass
+                logger.warning("Stats labels update failed", exc_info=True)
         if hasattr(self, "update_status"):
             self.update_status("Results cleared", "gray")
 
     def _cancel_operation(self):
         """
         Escape: 取消当前操作（占位 — v1.1.0 无 active cancel 钩子）。
-
-        Stage 5 接入 HistoryTab 后可扩展为停止扫描线程。
         """
         if hasattr(self, "update_status"):
             self.update_status("Operation cancelled (no active op)", "yellow")
@@ -319,14 +314,16 @@ class MainWindow(ctk.CTk):
         
         # WizTree路径
         self.create_input_field(self.config_scroll, "WizTree Path:", "wiztree_path", 
-                               placeholder="W:\\WizTree\\WizTree64.exe", default="W:\\WizTree\\WizTree64.exe")
+                               placeholder="W:\\WizTree\\WizTree64.exe", default="W:\\WizTree\\WizTree64.exe",
+                               browse_type="file")
         
         # 目标磁盘
         self.create_drive_selector(self.config_scroll)
         
         # 深度检索文件夹
         self.create_input_field(self.config_scroll, "Deep Search Folder:", "scope_entry",
-                               placeholder="e.g. C:\\Users\\you\\AppData")
+                               placeholder="e.g. C:\\Users\\you\\AppData",
+                               browse_type="folder")
         
         # 最小文件大小
         self.create_input_field(self.config_scroll, "Min File Size:", "min_size_entry",
@@ -335,17 +332,37 @@ class MainWindow(ctk.CTk):
         # 扫描按钮和进度区域
         self.create_scan_controls(self.config_scroll)
         
-        # ========== LLM配置分组 ==========
-        self.create_section_header(self.config_scroll, "LLM Configuration", "🤖")
-        
-        # API Key
-        self.create_input_field(self.config_scroll, "API Key:", "api_key_entry",
-                               placeholder="sk-...", show="*")
-        
-        # API Base URL
-        self.create_input_field(self.config_scroll, "API Base URL:", "api_base_entry",
-                               placeholder="https://api.deepseek.com", default="https://api.deepseek.com")
-        
+        # LLM Model Selector
+        self.create_section_header(self.config_scroll, "LLM Model", "🤖")
+
+        model_frame = ctk.CTkFrame(self.config_scroll, fg_color="transparent")
+        model_frame.pack(fill="x", padx=10, pady=5)
+
+        self.model_status_label = ctk.CTkLabel(
+            model_frame, text="Checking API keys...",
+            text_color="gray", anchor="w"
+        )
+        self.model_status_label.pack(fill="x", pady=(0, 5))
+
+        self.model_var = ctk.StringVar(value="")
+        self.model_dropdown = ctk.CTkOptionMenu(
+            model_frame,
+            values=["(no API key configured)"],
+            variable=self.model_var,
+            height=32,
+            command=self._on_model_selected
+        )
+        self.model_dropdown.pack(fill="x")
+
+        self.config_keys_btn = ctk.CTkButton(
+            model_frame,
+            text="⚙️ Configure API Keys...",
+            height=28,
+            command=self.open_settings
+        )
+
+        self._refresh_model_selector()
+
         # ========== 右侧内容区 ==========
         self.content_frame = ctk.CTkFrame(self, corner_radius=10)
         self.content_frame.grid(row=1, column=1, padx=(5, 10), pady=10, sticky="nsew")
@@ -366,40 +383,74 @@ class MainWindow(ctk.CTk):
         self.action_tab = self.tabview.add("🗑️ File Actions")
         self.setup_action_tab()
 
-        # 模型浏览器标签页（Stage 2 新增）
-        self.models_tab_obj = ModelsTab(self.tabview.add("🤖 Models"))
-
-        # Prompt 编辑器标签页（Stage 2 新增）
-        self.prompts_tab_obj = PromptsTab(self.tabview.add("📝 Prompts"))
-
-        # History 标签页（Stage 5 新增：审计历史 + 还原）
-        # 位置：Settings 之前（Settings 是 dialog，不是 tab，所以这里就是最后）
-        if _HISTORY_TAB_AVAILABLE and HistoryTab is not None:
-            try:
-                # 共享项目根的 audit.db；Stage 6 可改为可配置
-                import os
-                _audit_db_path = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                    "audit.db",
-                )
-                self.history_tab_obj = HistoryTab(
-                    self.tabview.add("📜 History"),
-                    audit_db_path=_audit_db_path,
-                )
-            except Exception as e:  # pragma: no cover
-                logger.debug("HistoryTab 初始化失败: %s", e)
-                self.history_tab_obj = None
-        else:
-            self.history_tab_obj = None
+        # History, Prompts, Models tabs removed (v1.2.1) — always empty, no data sources
 
     def open_settings(self):
         """打开设置对话框（Stage 2：⚙️ 齿轮按钮回调）"""
+        import traceback
         try:
             from src.ui.settings_dialog import SettingsDialog
-            SettingsDialog(master=self)
-        except Exception as e:  # pragma: no cover
+            SettingsDialog(master=self, on_close=self._on_settings_closed)
+        except Exception as e:
+            error_msg = f"{e}\n\n{traceback.format_exc()}"
+            logger.error("Settings error: %s", error_msg)
             from tkinter import messagebox
-            messagebox.showerror("Settings error", f"无法打开设置: {e}")
+            messagebox.showerror("Settings Error", error_msg[:500])
+
+    def _on_settings_closed(self):
+        self._apply_saved_theme()
+        self._refresh_model_selector()
+
+    def _on_model_selected(self, choice):
+        """模型选择变更回调"""
+        logger.info("LLM model selected: %s", choice)
+
+    def _refresh_model_selector(self):
+        """刷新模型选择器：后台检查哪些 provider 有 API key"""
+        def _check():
+            try:
+                from src.utils.credential_store import CredentialStore
+                store = CredentialStore()
+            except Exception:
+                store = None
+
+            available = []
+            if store:
+                try:
+                    from src.analyzer.llm_router import LLMRouter
+                    if not self._llm_router:
+                        self._llm_router = LLMRouter()
+                    for name, info in self._llm_router.get_provider_status().items():
+                        if info.get("has_api_key"):
+                            for model in info.get("models", []):
+                                available.append(f"{name}: {model}")
+                except Exception:
+                    logger.warning("LLM router provider status query failed", exc_info=True)
+
+            def _update():
+                try:
+                    if not self.winfo_exists():
+                        return
+                    if available:
+                        self.model_dropdown.configure(values=available)
+                        self.model_var.set(available[0])
+                        self.model_status_label.configure(
+                            text=f"✓ {len(available)} models available", text_color="green"
+                        )
+                        self.config_keys_btn.pack_forget()
+                    else:
+                        self.model_dropdown.configure(values=["(no API key configured)"])
+                        self.model_var.set("(no API key configured)")
+                        self.model_status_label.configure(
+                            text="No API keys configured", text_color="orange"
+                        )
+                        self.config_keys_btn.pack(fill="x", pady=(5, 0))
+                except Exception:
+                    logger.warning("Model selector UI update failed", exc_info=True)
+            self.after(0, _update)
+
+        import threading
+        threading.Thread(target=_check, daemon=True).start()
         
     def create_section_header(self, parent, title, icon=""):
         """创建分组标题"""
@@ -417,20 +468,51 @@ class MainWindow(ctk.CTk):
             anchor="w"
         ).pack(side="left")
         
-    def create_input_field(self, parent, label_text, attr_name, placeholder="", default="", show=None):
+    def create_input_field(self, parent, label_text, attr_name, placeholder="", default="", show=None, browse_type=None):
         """创建输入字段"""
         field_frame = ctk.CTkFrame(parent, fg_color="transparent")
         field_frame.pack(fill="x", padx=10, pady=(0, 8))
         
         ctk.CTkLabel(field_frame, text=label_text, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 2))
         
-        entry = ctk.CTkEntry(field_frame, placeholder_text=placeholder, show=show, height=32)
-        entry.pack(fill="x")
+        if browse_type:
+            row = ctk.CTkFrame(field_frame, fg_color="transparent")
+            row.pack(fill="x")
+            entry = ctk.CTkEntry(row, placeholder_text=placeholder, show=show, height=32)
+            entry.pack(side="left", fill="x", expand=True)
+            if browse_type == "folder":
+                cmd = lambda e=entry: self._browse_folder(e)
+            elif browse_type == "file":
+                cmd = lambda e=entry: self._browse_file(e)
+            else:
+                cmd = None
+            browse_btn = ctk.CTkButton(row, text="Browse...", width=80, command=cmd)
+            browse_btn.pack(side="right", padx=(5, 0))
+        else:
+            entry = ctk.CTkEntry(field_frame, placeholder_text=placeholder, show=show, height=32)
+            entry.pack(fill="x")
         
         if default:
             entry.insert(0, default)
             
         setattr(self, attr_name, entry)
+        
+    def _browse_folder(self, entry):
+        """Open folder picker and fill selected path into entry."""
+        folder = filedialog.askdirectory(title="Select folder to scan")
+        if folder:
+            entry.delete(0, "end")
+            entry.insert(0, folder)
+
+    def _browse_file(self, entry):
+        """Open file picker and fill selected path into entry."""
+        path = filedialog.askopenfilename(
+            title="Select WizTree executable",
+            filetypes=[("Executable files", "*.exe"), ("All files", "*.*")],
+        )
+        if path:
+            entry.delete(0, "end")
+            entry.insert(0, path)
         
     def create_drive_selector(self, parent):
         """创建磁盘选择器"""
@@ -652,7 +734,7 @@ class MainWindow(ctk.CTk):
         self.risk_filter = ctk.CTkOptionMenu(
             filter_frame,
             variable=self.risk_filter_var,
-            values=["All", "High", "Medium", "Low"],
+            values=["All", "Critical", "High", "Medium", "Low"],
             width=100,
             command=self.filter_by_risk
         )
@@ -728,22 +810,54 @@ class MainWindow(ctk.CTk):
         )
         self.delete_button.pack(side="left")
         
+        # 批次导航按钮
+        self.prev_batch_button = ctk.CTkButton(
+            btn_frame,
+            text="⬅️ Previous Batch",
+            width=120,
+            height=32,
+            command=self.prev_batch,
+            state="disabled"
+        )
+        self.prev_batch_button.pack(side="left", padx=(10, 5))
+        
+        self.next_batch_button = ctk.CTkButton(
+            btn_frame,
+            text="Next Batch ➡️",
+            width=120,
+            height=32,
+            command=self.next_batch,
+            state="disabled"
+        )
+        self.next_batch_button.pack(side="left")
+        
     def on_window_resize(self, event):
         """处理窗口缩放事件"""
-        # 只处理主窗口的缩放事件
         if event.widget != self:
             return
-            
-        # 根据窗口宽度调整左侧面板宽度
+        
+        if "_last_config_width" not in self.__dict__:
+            self._last_config_width = 0
+
         width = event.width
+        if width == self._last_config_width:
+            return
+        self._last_config_width = width
+
         if width < 1300:
             new_width = 250
         elif width < 1600:
             new_width = 300
         else:
             new_width = 350
-            
-        self.config_frame.configure(width=new_width)
+
+        def _apply():
+            try:
+                self.config_frame.configure(width=new_width)
+            except Exception:
+                logger.debug("Failed to configure config frame width", exc_info=True)
+
+        self.after_idle(_apply)
         
     def detect_drives(self):
         """检测可用磁盘"""
@@ -769,41 +883,32 @@ class MainWindow(ctk.CTk):
     def toggle_select_all(self):
         """全选/取消全选"""
         select_all = self.select_all_var.get()
-        for item in self.action_tree.get_children():
-            values = list(self.action_tree.item(item, "values"))
-            values[0] = "☑" if select_all else "☐"
-            self.action_tree.item(item, values=values)
+        for rec in self.recommendations:
+            rec.selected = select_all
+        data = []
+        for rec in self.recommendations:
+            checkbox = "☑" if rec.selected else "☐"
+            data.append((checkbox, str(rec.file.path),
+                         self.format_size(rec.file.size), rec.reason, rec.risk_level.value))
+        self.action_tree.set_data(data)
+        self.action_tree.refresh()
         self.update_selected_count()
         
     def filter_by_risk(self, value):
         """按风险等级筛选"""
-        # 清空表格
-        for item in self.action_tree.get_children():
-            self.action_tree.delete(item)
-            
-        # 重新添加筛选后的数据（使用虚拟滚动）
         data = []
         for rec in self.recommendations:
             if value == "All" or rec.risk_level.value.lower() == value.lower():
                 size_str = self.format_size(rec.file.size)
-                data.append((
-                    "☐",
-                    str(rec.file.path),
-                    size_str,
-                    rec.reason,
-                    rec.risk_level.value
-                ))
+                checkbox = "☑" if rec.selected else "☐"
+                data.append((checkbox, str(rec.file.path), size_str, rec.reason, rec.risk_level.value))
         self.action_tree.set_data(data)
         self.action_tree.refresh()
                 
     def preview_selected(self):
         """预览选中的文件"""
-        selected = []
-        for item in self.action_tree.get_children():
-            values = self.action_tree.item(item, "values")
-            if values and values[0] == "☑":
-                selected.append(values[1])
-                
+        selected = [str(rec.file.path) for rec in self.recommendations if rec.selected]
+             
         if not selected:
             return
             
@@ -851,7 +956,13 @@ class MainWindow(ctk.CTk):
         self.show_ai_loading(True)
 
         # 在后台线程中执行扫描
-        thread = threading.Thread(target=self.scan_thread, daemon=True)
+        scope = self.scope_entry.get().strip()
+        target = scope if (scope and os.path.isdir(scope)) else self.drive_var.get()
+        options = ScanOptions()
+        min_size = self.min_size_entry.get().strip()
+        if min_size:
+            options.min_size = min_size
+        thread = threading.Thread(target=self.scan_thread, args=(target, options), daemon=True)
         thread.start()
 
     def _on_scan_progress(self, progress_info) -> None:
@@ -861,57 +972,71 @@ class MainWindow(ctk.CTk):
             files = getattr(progress_info, "files_scanned", 0)
             self.after(0, lambda m=msg, f=files: self._apply_progress(m, f))
         except Exception:
-            pass
+            logger.warning("Scan progress callback failed", exc_info=True)
 
     def _apply_progress(self, message: str, files_scanned: int) -> None:
         """Stage 3: 在 UI 线程中应用进度更新"""
         try:
+            if not self.winfo_exists():
+                return
             if files_scanned > 0:
                 self.update_status(f"{message} ({files_scanned} files)", "yellow")
             else:
                 self.update_status(message, "yellow")
         except Exception:
-            pass
+            logger.warning("Apply progress update failed", exc_info=True)
 
-    def scan_thread(self):
+    def scan_thread(self, target, options):
         """扫描线程"""
+        def _safe_call(fn):
+            try:
+                if not self.winfo_exists():
+                    return
+                fn()
+            except Exception:
+                logger.warning("Safe call wrapper failed", exc_info=True)
+
         try:
-            # 获取扫描目标
-            scope = self.scope_entry.get().strip()
-            target = scope if (scope and os.path.isdir(scope)) else self.drive_var.get()
-
-            # 创建扫描选项
-            options = ScanOptions()
-            min_size = self.min_size_entry.get().strip()
-            if min_size:
-                options.min_size = min_size
-
             # Stage 3: 使用带缓存的扫描
-            self.after(0, lambda: self.update_status(f"Scanning {target}...", "yellow"))
+            self.after(0, lambda: _safe_call(lambda: self.update_status(f"Scanning {target}...", "yellow")))
             self.scan_result = self.scanner.scan_with_cache(target, options)
             
+            # v1.7.1: 限制扫描结果最大文件数，防止内存爆炸
+            if self.scan_result and len(self.scan_result.files) > self.MAX_SCAN_FILES:
+                original_count = len(self.scan_result.files)
+                self.scan_result.files = self.scan_result.files[:self.MAX_SCAN_FILES]
+                logger.warning(
+                    "Scan truncated: %d → %d files", 
+                    original_count, self.MAX_SCAN_FILES
+                )
+            
+            # 初始化文件池：按大小排序的所有扫描结果
+            if self.scan_result:
+                self._file_pool = sorted(self.scan_result.files, key=lambda x: x.size, reverse=True)
+                self._current_batch = 0
+            
             # 更新扫描结果
-            self.after(0, self.update_scan_results)
+            self.after(0, lambda: _safe_call(self.update_scan_results))
 
             # 执行规则引擎分析
-            self.after(0, lambda: self.update_ai_status("Analyzing files..."))
+            self.after(0, lambda: _safe_call(lambda: self.update_ai_status("Analyzing files...")))
             self.recommendations, _ = self.rule_engine.analyze_files(self.scan_result.files)
 
             # 更新AI分析结果
-            self.after(0, self.update_ai_analysis)
-            self.after(0, self.update_action_table)
+            self.after(0, lambda: _safe_call(self.update_ai_analysis))
+            self.after(0, lambda: _safe_call(self.update_action_table))
             
             # 完成
-            self.after(0, lambda: self.update_status(
+            self.after(0, lambda: _safe_call(lambda: self.update_status(
                 f"✅ Done! Found {len(self.scan_result.files)} files, {len(self.recommendations)} recommendations",
                 "green"
-            ))
+            )))
             
         except Exception as e:
-            self.after(0, lambda: self.show_error(f"Scan failed: {str(e)}"))
+            self.after(0, lambda: _safe_call(lambda: self.show_error(f"Scan failed: {str(e)}")))
         finally:
             # 停止动画
-            self.after(0, self.stop_scan_animations)
+            self.after(0, lambda: _safe_call(self.stop_scan_animations))
             
     def stop_scan_animations(self):
         """停止扫描动画"""
@@ -971,6 +1096,12 @@ class MainWindow(ctk.CTk):
         self.ai_status_label.configure(text=message)
         self.update_status(message, "yellow")
         
+    # ----------------------------------------------------------------
+    # v1.7.1: 文件显示上限 (防止大量文件撑爆内存)
+    # ----------------------------------------------------------------
+    MAX_SCAN_FILES = 5000
+    MAX_DISPLAY_FILES = 500
+
     def update_scan_results(self):
         """更新扫描结果表格"""
         # Stage 3 (v1.3.0): 隐藏扫描骨架屏
@@ -985,10 +1116,13 @@ class MainWindow(ctk.CTk):
             
         # 更新统计卡片
         self.update_stats_cards()
-            
+        
+        total = len(self.scan_result.files)
+        display_count = min(total, self.MAX_DISPLAY_FILES)
+        
         # 添加数据（使用虚拟滚动）
         data = []
-        for i, file_info in enumerate(self.scan_result.files[:100], 1):
+        for i, file_info in enumerate(self.scan_result.files[:display_count], 1):
             size_str = self.format_size(file_info.size)
             data.append((
                 i,
@@ -998,6 +1132,13 @@ class MainWindow(ctk.CTk):
             ))
         self.scan_tree.set_data(data)
         self.scan_tree.refresh()
+        
+        # 显示截断提示
+        if total > self.MAX_DISPLAY_FILES:
+            self.update_status(
+                f"Showing {self.MAX_DISPLAY_FILES:,} of {total:,} files (scan capped at {self.MAX_SCAN_FILES:,})",
+                "orange"
+            )
             
     def update_stats_cards(self):
         """更新统计卡片"""
@@ -1055,8 +1196,8 @@ class MainWindow(ctk.CTk):
             
             for i, rec in enumerate(self.recommendations[:20], 1):
                 size_str = self.format_size(rec.file.size)
-                risk_icon = "🔴" if rec.risk_level.value == "High" else "🟡" if rec.risk_level.value == "Medium" else "🟢"
-                self.ai_text.insert("end", f"  #{i} {risk_icon} [{rec.risk_level.value}]\n")
+                risk_icon = "⛔" if rec.risk_level.value == "critical" else "🔴" if rec.risk_level.value == "high" else "🟡" if rec.risk_level.value == "medium" else "🟢"
+                self.ai_text.insert("end", f"  #{i} {risk_icon} [{rec.risk_level.value.upper()}]\n")
                 self.ai_text.insert("end", f"     📄 {rec.file.path}\n")
                 self.ai_text.insert("end", f"     💾 Size: {size_str}\n")
                 self.ai_text.insert("end", f"     💡 Reason: {rec.reason}\n\n")
@@ -1065,23 +1206,30 @@ class MainWindow(ctk.CTk):
         
     def update_action_table(self):
         """更新文件操作表格"""
-        # 清空表格
-        for item in self.action_tree.get_children():
-            self.action_tree.delete(item)
-            
-        # 添加建议的文件（使用虚拟滚动）
         data = []
-        for rec in self.recommendations:
-            size_str = self.format_size(rec.file.size)
-            data.append((
-                "☐",
-                str(rec.file.path),
-                size_str,
-                rec.reason,
-                rec.risk_level.value
-            ))
+        # 显示文件池中的文件（按批次）
+        start_idx = self._current_batch * self._batch_size
+        end_idx = start_idx + self._batch_size
+        batch_files = self._file_pool[start_idx:end_idx]
+        
+        for i, file_info in enumerate(batch_files):
+            size_str = self.format_size(file_info.size)
+            # 检查是否在推荐列表中
+            rec = next((r for r in self.recommendations if r.file.path == file_info.path), None)
+            if rec:
+                checkbox = "☑" if rec.selected else "☐"
+                reason = rec.reason
+                risk = rec.risk_level.value
+            else:
+                checkbox = "☐"
+                reason = "Not recommended for deletion"
+                risk = "N/A"
+            data.append((checkbox, str(file_info.path), size_str, reason, risk))
         self.action_tree.set_data(data)
         self.action_tree.refresh()
+        
+        # 更新批次按钮状态
+        self.update_batch_buttons()
             
     def on_action_tree_click(self, event):
         """处理文件操作表格点击"""
@@ -1100,30 +1248,23 @@ class MainWindow(ctk.CTk):
             values = list(self.action_tree.item(item, "values"))
             values[0] = "☑" if values[0] == "☐" else "☐"
             self.action_tree.item(item, values=values)
+            is_selected = values[0] == "☑"
+            path = values[1]
+            for rec in self.recommendations:
+                if str(rec.file.path) == path:
+                    rec.selected = is_selected
+                    break
             self.update_selected_count()
             
     def update_selected_count(self):
         """更新选中文件计数"""
         count = 0
         total_size = 0
-        for item in self.action_tree.get_children():
-            values = self.action_tree.item(item, "values")
-            if values and values[0] == "☑":
+        for rec in self.recommendations:
+            if rec.selected:
                 count += 1
-                # 解析大小字符串
-                size_str = values[2]
-                try:
-                    if "GB" in size_str:
-                        total_size += float(size_str.replace(" GB", "")) * 1024 ** 3
-                    elif "MB" in size_str:
-                        total_size += float(size_str.replace(" MB", "")) * 1024 ** 2
-                    elif "KB" in size_str:
-                        total_size += float(size_str.replace(" KB", "")) * 1024
-                    else:
-                        total_size += float(size_str.replace(" B", ""))
-                except:
-                    pass
-                
+                total_size += rec.file.size
+                 
         size_text = self.format_size(int(total_size)) if total_size > 0 else "0 B"
         self.selected_label.configure(text=f"{count} files selected ({size_text})")
         
@@ -1134,57 +1275,109 @@ class MainWindow(ctk.CTk):
         
     def delete_selected(self):
         """删除选中的文件"""
-        selected = []
-        for item in self.action_tree.get_children():
-            values = self.action_tree.item(item, "values")
-            if values and values[0] == "☑":
-                selected.append(values[1])
-                
-        if not selected:
+        # 获取当前批次中选中的文件
+        start_idx = self._current_batch * self._batch_size
+        end_idx = start_idx + self._batch_size
+        batch_files = self._file_pool[start_idx:end_idx]
+        
+        selected_files = []
+        for file_info in batch_files:
+            rec = next((r for r in self.recommendations if r.file.path == file_info.path), None)
+            if rec and rec.selected:
+                selected_files.append((file_info, rec))
+        
+        if not selected_files:
             return
-            
+             
         # 确认对话框
         from tkinter import messagebox
         confirm = messagebox.askyesno(
             "Confirm Delete",
-            f"Are you sure you want to delete {len(selected)} files?\n\n"
+            f"Are you sure you want to delete {len(selected_files)} files?\n\n"
             "Files will be moved to Recycle Bin if send2trash is available.",
             icon="warning"
         )
         
         if not confirm:
             return
-            
+             
         # 执行删除
         try:
             from send2trash import send2trash
             use_send2trash = True
         except ImportError:
+            logger.debug("send2trash not available, falling back to os.remove")
             use_send2trash = False
-            
+             
         deleted = 0
         errors = 0
-        for file_path in selected:
+        deleted_paths = set()
+        for file_info, rec in selected_files:
             try:
-                if os.path.exists(file_path):
+                path = str(file_info.path)
+                if os.path.exists(path):
                     if use_send2trash:
-                        send2trash(file_path)
+                        send2trash(path)
                     else:
-                        os.remove(file_path)
+                        os.remove(path)
                     deleted += 1
+                    deleted_paths.add(path)
             except Exception:
+                logger.warning("Delete failed: %s", file_info.path, exc_info=True)
                 errors += 1
-                
-        # 更新表格
-        for item in self.action_tree.get_children():
-            values = self.action_tree.item(item, "values")
-            if values and values[0] == "☑" and values[1] in selected:
-                self.action_tree.delete(item)
-                
+                 
+        # 从文件池中移除已删除的文件
+        self._file_pool = [f for f in self._file_pool if str(f.path) not in deleted_paths]
+        
+        # 从推荐列表中移除已删除的文件
+        self.recommendations = [rec for rec in self.recommendations if str(rec.file.path) not in deleted_paths]
+        
+        # 重新分析文件池中的文件（如果推荐列表为空）
+        if not self.recommendations and self._file_pool:
+            # 从文件池中取出下一批文件进行分析
+            start_idx = self._current_batch * self._batch_size
+            end_idx = start_idx + self._batch_size
+            next_batch = self._file_pool[start_idx:end_idx]
+            if next_batch:
+                self.recommendations, _ = self.rule_engine.analyze_files(next_batch)
+        
+        # 更新表格显示
+        self.update_action_table()
         self.update_selected_count()
         
         # 显示结果
         messagebox.showinfo("Delete Result", f"Deleted: {deleted}\nErrors: {errors}")
+        
+    def prev_batch(self):
+        """显示上一批文件"""
+        if self._current_batch > 0:
+            self._current_batch -= 1
+            self.update_action_table()
+            self.update_batch_buttons()
+        
+    def next_batch(self):
+        """显示下一批文件"""
+        max_batch = (len(self._file_pool) - 1) // self._batch_size
+        if self._current_batch < max_batch:
+            self._current_batch += 1
+            self.update_action_table()
+            self.update_batch_buttons()
+        
+    def update_batch_buttons(self):
+        """更新批次按钮状态"""
+        max_batch = (len(self._file_pool) - 1) // self._batch_size if self._file_pool else 0
+        
+        # 更新“上一轮”按钮状态
+        if self._current_batch > 0:
+            self.prev_batch_button.configure(state="normal")
+        else:
+            self.prev_batch_button.configure(state="disabled")
+        
+        # 更新“下一轮”按钮状态
+        if self._current_batch < max_batch:
+            self.next_batch_button.configure(state="normal")
+        else:
+            self.next_batch_button.configure(state="disabled")
         
     def show_error(self, message: str):
         """显示错误消息"""

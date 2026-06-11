@@ -20,19 +20,20 @@ v1.2.0 新增：跨平台安全的 API Key 存储。
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import keyring
     import keyring.errors
     _KEYRING_AVAILABLE = True
 except ImportError:  # pragma: no cover - import-time guard
+    logger.debug("keyring import failed", exc_info=True)
     keyring = None  # type: ignore
     _KEYRING_AVAILABLE = False
-
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -75,13 +76,23 @@ class CredentialStore:
                 "keyring 库未安装。请先运行: pip install keyring>=24.0.0"
             )
 
-        # 获取当前后端（用于诊断）
-        try:
-            backend = keyring.get_keyring()
-            self._backend_name: str = type(backend).__name__
-        except Exception as e:  # pragma: no cover
-            logger.warning("无法获取 keyring 后端: %s", e)
-            self._backend_name = "<unknown>"
+        self._backend_name: str = "<unknown>"
+        self._backend_ready = threading.Event()
+
+        def _detect_backend():
+            try:
+                backend = keyring.get_keyring()
+                self._backend_name = type(backend).__name__
+            except Exception as e:
+                logger.warning("无法获取 keyring 后端: %s", e)
+            finally:
+                self._backend_ready.set()
+
+        t = threading.Thread(target=_detect_backend, daemon=True)
+        t.start()
+        if not self._backend_ready.wait(timeout=3.0):
+            logger.warning("Keyring 后端检测超时（>3s），跳过")
+            self._backend_name = "<unresponsive>"
 
     # ------------------------------------------------------------------
     # 核心 API

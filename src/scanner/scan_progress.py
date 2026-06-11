@@ -1,8 +1,11 @@
 import threading
 import time
+import logging
 from typing import Callable, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class ScanStatus(Enum):
@@ -178,7 +181,7 @@ class ScanProgress:
                 try:
                     self._on_complete(result)
                 except Exception:
-                    pass
+                    logger.debug("on_complete callback failed", exc_info=True)
     
     def fail(self, error: Exception):
         """
@@ -201,7 +204,7 @@ class ScanProgress:
                 try:
                     self._on_error(error)
                 except Exception:
-                    pass
+                    logger.debug("on_error callback failed", exc_info=True)
     
     def cancel(self):
         """取消扫描"""
@@ -231,7 +234,7 @@ class ScanProgress:
                 try:
                     self._on_error(TimeoutError(self._error))
                 except Exception:
-                    pass
+                    logger.debug("on_error callback failed for timeout", exc_info=True)
     
     def _cancel_timeout_timer(self):
         """取消超时定时器"""
@@ -245,7 +248,7 @@ class ScanProgress:
             try:
                 self._on_progress(self.progress_info)
             except Exception:
-                pass
+                logger.debug("on_progress callback failed", exc_info=True)
     
     def reset(self):
         """重置进度管理器"""
