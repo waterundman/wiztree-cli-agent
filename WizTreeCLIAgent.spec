@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('config', 'config'), ('README.md', '.')]
 binaries = []
-hiddenimports = ['customtkinter', 'openai', 'send2trash', 'matplotlib', 'squarify', 'tkinter', 'sqlite3', 'src.ui', 'src.ui.main_window', 'src.ui.tabs', 'src.ui.components', 'src.ui.animations', 'src.ui.themes']
+hiddenimports = ['customtkinter', 'openai', 'send2trash', 'matplotlib', 'squarify', 'tkinter', 'sqlite3', 'src.ui', 'src.ui.main_window', 'src.ui.tabs', 'src.ui.components', 'src.ui.animations', 'src.ui.themes', 'src.utils.config_loader', 'src.utils.credential_store']
 datas += collect_data_files('matplotlib')
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
