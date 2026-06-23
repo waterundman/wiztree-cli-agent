@@ -1,11 +1,19 @@
 import os
 import json
+import random
+import threading
 import time
 from typing import List, Dict, Optional, Generator, Any
 from datetime import datetime
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletionChunk
+from openai import (
+    APITimeoutError as Timeout,
+    APIConnectionError as ConnectionError,
+    AuthenticationError,
+    APIError,
+)
 
 from .interface import AnalyzerInterface
 from .json_parser import StreamingJsonParser
@@ -240,11 +248,36 @@ class LLMAnalyzer(AnalyzerInterface):
                 content = response.choices[0].message.content
                 return self._parse_llm_response(content, files)
                 
-            except Exception as e:
+            except AuthenticationError:
+                # 不可重试异常：认证失败，直接抛出
+                raise
+            except (Timeout, ConnectionError) as e:
+                # 可重试异常：超时/连接错误
                 if attempt == self.max_retries - 1:
                     raise
-                print(f"Attempt {attempt + 1} failed, retrying: {e}")
-                time.sleep(2 ** attempt)  # 指数退避
+                # 指数退避 + random jitter 防止 thundering herd
+                base_delay = 2 ** attempt
+                jitter = random.uniform(0, base_delay * 0.5)
+                delay = base_delay + jitter
+                print(f"Attempt {attempt + 1} failed (retryable), retrying in {delay:.1f}s: {e}")
+                time.sleep(delay)
+            except APIError as e:
+                # API 错误：检查是否可重试
+                if attempt == self.max_retries - 1:
+                    raise
+                # 某些 API 错误可能可重试（如 429 限流）
+                if hasattr(e, 'status_code') and e.status_code == 429:
+                    base_delay = 2 ** attempt
+                    jitter = random.uniform(0, base_delay * 0.5)
+                    delay = base_delay + jitter
+                    print(f"Attempt {attempt + 1} failed (rate limited), retrying in {delay:.1f}s: {e}")
+                    time.sleep(delay)
+                else:
+                    # 其他 API 错误不重试
+                    raise
+            except Exception as e:
+                # 未知异常：不重试
+                raise
         
         return []
     
@@ -586,9 +619,24 @@ class LLMAnalyzer(AnalyzerInterface):
         self._is_streaming = False
         if self._current_stream:
             try:
-                self._current_stream.close()
-            except:
-                pass
+                # 添加超时保护，防止 close() 阻塞
+                close_timeout = 5.0  # 5秒超时
+                
+                def close_stream():
+                    try:
+                        self._current_stream.close()
+                    except Exception as e:
+                        print(f"Warning: error in close_stream thread: {e}")
+                
+                close_thread = threading.Thread(target=close_stream, daemon=True)
+                close_thread.start()
+                close_thread.join(timeout=close_timeout)
+                
+                if close_thread.is_alive():
+                    print(f"Warning: stream.close() timed out after {close_timeout}s")
+                    
+            except Exception as e:
+                print(f"Warning: error closing stream: {e}")
     
     @property
     def is_streaming(self) -> bool:

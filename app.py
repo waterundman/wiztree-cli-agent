@@ -64,60 +64,66 @@ class WizTreeAgentApp:
 
     def run_cli(self):
         """运行命令行模式"""
-        self.initialize()
-        print("\n" + "=" * 50)
-        print("WizTree CLI Agent - Command Line Mode")
-        print("=" * 50)
-        
-        # 测试扫描器
-        print("\n1. Testing Scanner Module...")
-        print(f"   Scanner: {self.scanner}")
-        print(f"   Supported options: {self.scanner.get_supported_options()}")
-        
-        # 测试路由器
-        print("\n2. Testing LLM Router...")
-        if self.router:
-            status = self.router.get_provider_status()
-            available_providers = sum(1 for info in status.values() if info['has_api_key'])
-            print(f"   Router: {self.router.strategy.value}")
-            print(f"   Available providers: {available_providers}/{len(status)}")
-            print(f"   Available models: {len(self.router.get_available_models())}")
-        else:
-            print("   Router: Not available")
-        
-        # 测试分析器
-        print("\n3. Testing Analyzer Module...")
-        if self.analyzer:
-            if self.analyzer.is_available:
-                print(f"   Analyzer: Available (API key configured)")
+        status = 'no_llm'
+        try:
+            self.initialize()
+            print("\n" + "=" * 50)
+            print("WizTree CLI Agent - Command Line Mode")
+            print("=" * 50)
+            
+            # 测试扫描器
+            print("\n1. Testing Scanner Module...")
+            print(f"   Scanner: {self.scanner}")
+            print(f"   Supported options: {self.scanner.get_supported_options()}")
+            
+            # 测试路由器
+            print("\n2. Testing LLM Router...")
+            if self.router:
+                status = self.router.get_provider_status()
+                available_providers = sum(1 for info in status.values() if info['has_api_key'])
+                print(f"   Router: {self.router.strategy.value}")
+                print(f"   Available providers: {available_providers}/{len(status)}")
+                print(f"   Available models: {len(self.router.get_available_models())}")
             else:
-                print(f"   Analyzer: Lazy mode (no API key, using rule engine)")
-        else:
-            print(f"   Analyzer: Not available")
-        
-        # 测试安全管理器
-        print("\n4. Testing Safety Module...")
-        print(f"   Safety Manager: {self.safety}")
-        
-        # 测试路径验证
-        print("\n5. Testing Path Validator...")
-        validator = PathValidator()
-        test_path = "C:\\Users"
-        result = validator.validate(test_path)
-        print(f"   Path '{test_path}' validation: {result}")
-        
-        print("\n" + "=" * 50)
-        print("All modules initialized successfully!")
-        print("\nLLM Router Providers:")
-        if self.router:
-            for name, info in status.items():
-                has_key = "[OK]" if info['has_api_key'] else "[--]"
-                print(f"   {has_key} {name}: {info['models']}")
-        
-        print("\nNote: GUI mode requires tkinter to be installed.")
-        print("Current Python installation does not have tkinter.")
-        
-        return True
+                print("   Router: Not available")
+            
+            # 测试分析器
+            print("\n3. Testing Analyzer Module...")
+            if self.analyzer:
+                if self.analyzer.is_available:
+                    print(f"   Analyzer: Available (API key configured)")
+                else:
+                    print(f"   Analyzer: Lazy mode (no API key, using rule engine)")
+            else:
+                print(f"   Analyzer: Not available")
+            
+            # 测试安全管理器
+            print("\n4. Testing Safety Module...")
+            print(f"   Safety Manager: {self.safety}")
+            
+            # 测试路径验证
+            print("\n5. Testing Path Validator...")
+            validator = PathValidator()
+            test_path = "C:\\Users"
+            result = validator.validate(test_path)
+            print(f"   Path '{test_path}' validation: {result}")
+            
+            print("\n" + "=" * 50)
+            print("All modules initialized successfully!")
+            print("\nLLM Router Providers:")
+            if self.router and isinstance(status, dict):
+                for name, info in status.items():
+                    has_key = "[OK]" if info['has_api_key'] else "[--]"
+                    print(f"   {has_key} {name}: {info['models']}")
+            
+            print("\nNote: GUI mode requires tkinter to be installed.")
+            print("Current Python installation does not have tkinter.")
+            
+            return True
+        except Exception as e:
+            print(f"\nError during CLI run: {e}", file=sys.stderr)
+            logger.exception("Unhandled exception in run_cli")
+            return False
 
 
 def _setup_crash_handler():

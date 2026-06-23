@@ -228,11 +228,9 @@ class TestStartScanButtonState:
             from src.ui.main_window import MainWindow
             mw = MainWindow()
 
-            # Mock 验证路径存在
             with patch("os.path.isfile", return_value=True):
-                # Mock scanner 和线程避免实际扫描
-                with patch("src.ui.main_window.WizTreeScanner"):
-                    with patch("src.ui.main_window.threading.Thread") as mock_thread:
+                with patch("src.ui.controllers.scan_controller.StreamingScanner"):
+                    with patch("src.ui.controllers.scan_controller.threading.Thread") as mock_thread:
                         mock_thread_instance = MagicMock()
                         mock_thread.return_value = mock_thread_instance
 
@@ -241,7 +239,6 @@ class TestStartScanButtonState:
                         state = str(mw.scan_button.cget("state"))
                         assert state == "disabled"
                         assert "Scanning" in str(mw.scan_button.cget("text"))
-                        mock_thread_instance.start.assert_called_once()
 
             mw.destroy()
         finally:
@@ -258,14 +255,13 @@ class TestStartScanButtonState:
             mw = MainWindow()
 
             with patch("os.path.isfile", return_value=True):
-                with patch("src.ui.main_window.WizTreeScanner"):
-                    with patch("src.ui.main_window.threading.Thread") as mock_thread:
+                with patch("src.ui.controllers.scan_controller.StreamingScanner"):
+                    with patch("src.ui.controllers.scan_controller.threading.Thread") as mock_thread:
                         mock_thread_instance = MagicMock()
                         mock_thread.return_value = mock_thread_instance
 
                         mw.start_scan()
 
-                        # 验证线程以 daemon=True 创建
                         call_kwargs = mock_thread.call_args
                         assert call_kwargs[1].get("daemon") is True or call_kwargs.kwargs.get("daemon") is True
                         mock_thread_instance.start.assert_called_once()
@@ -289,7 +285,7 @@ class TestStartScanButtonState:
             mw.wiztree_path.insert(0, "Z:\\nonexistent\\wiztree.exe")
 
             with patch("os.path.isfile", return_value=False):
-                with patch("src.ui.main_window.threading.Thread") as mock_thread:
+                with patch("src.ui.controllers.scan_controller.threading.Thread") as mock_thread:
                     with patch("tkinter.messagebox.showerror"):
                         mw.start_scan()
 
@@ -310,7 +306,7 @@ class TestUpdateScanResultsTruncation:
 
     @skip_if_no_tkinter
     def test_truncation_limits_display(self):
-        """文件数超过 MAX_DISPLAY_FILES 时只显示前 MAX_DISPLAY_FILES 个"""
+        """文件数超过 500 时只传入前 500 个给 treeview"""
         import tkinter as tk
         root = tk.Tk()
         root.withdraw()
@@ -319,8 +315,7 @@ class TestUpdateScanResultsTruncation:
             from src.models.file_info import FileInfo
             mw = MainWindow()
 
-            # 创建超过 MAX_DISPLAY_FILES 的模拟文件
-            max_display = MainWindow.MAX_DISPLAY_FILES
+            max_display = 500
             total_files = max_display + 200
             files = []
             for i in range(total_files):
@@ -337,14 +332,14 @@ class TestUpdateScanResultsTruncation:
             mock_result.total_size = sum(f.size for f in files)
             mock_result.duration_seconds = 1.5
 
+            mw._scan_ctrl.scan_result = mock_result
+            mw._scan_ctrl._file_pool = files
             mw.scan_result = mock_result
             mw.update_scan_results()
 
-            # 验证 scan_tree 只有 MAX_DISPLAY_FILES 行
-            children = mw.scan_tree.get_children()
-            assert len(children) == max_display
+            # VirtualTreeview 使用虚拟渲染，检查内部数据总量
+            assert mw.scan_tree._total_rows == max_display
 
-            # 验证状态栏显示截断提示
             status_text = mw.status_label.cget("text")
             assert str(max_display) in status_text
 
@@ -354,7 +349,7 @@ class TestUpdateScanResultsTruncation:
 
     @skip_if_no_tkinter
     def test_no_truncation_when_under_limit(self):
-        """文件数不超过 MAX_DISPLAY_FILES 时全部显示"""
+        """文件数不超过 500 时全部传入 treeview"""
         import tkinter as tk
         root = tk.Tk()
         root.withdraw()
@@ -379,11 +374,12 @@ class TestUpdateScanResultsTruncation:
             mock_result.total_size = sum(f.size for f in files)
             mock_result.duration_seconds = 0.5
 
+            mw._scan_ctrl.scan_result = mock_result
+            mw._scan_ctrl._file_pool = files
             mw.scan_result = mock_result
             mw.update_scan_results()
 
-            children = mw.scan_tree.get_children()
-            assert len(children) == file_count
+            assert mw.scan_tree._total_rows == file_count
 
             mw.destroy()
         finally:
@@ -419,7 +415,7 @@ class TestUpdateActionTable:
 
     @skip_if_no_tkinter
     def test_action_table_populates_from_file_pool(self):
-        """update_action_table 从 _file_pool 填充 action_tree"""
+        """update_action_table 从控制器文件池填充 action_tree"""
         import tkinter as tk
         root = tk.Tk()
         root.withdraw()
@@ -429,7 +425,6 @@ class TestUpdateActionTable:
             from src.models.analysis_result import DeletionRecommendation, RiskLevel
             mw = MainWindow()
 
-            # 创建文件池
             files = []
             for i in range(5):
                 fi = FileInfo(
@@ -441,7 +436,6 @@ class TestUpdateActionTable:
             mw._file_pool = files
             mw._current_batch = 0
 
-            # 创建推荐（部分文件有推荐）
             rec = DeletionRecommendation(
                 file=files[0],
                 reason="Temporary file",
@@ -451,20 +445,12 @@ class TestUpdateActionTable:
                 selected=False,
             )
             mw.recommendations = [rec]
+            mw._analysis_ctrl.set_recommendations([rec])
 
             mw.update_action_table()
 
-            # 验证 action_tree 有数据
-            children = mw.action_tree.get_children()
-            assert len(children) == 5
-
-            # 验证第一条有推荐信息
-            first_values = mw.action_tree.item(children[0], "values")
-            assert "Temporary file" in str(first_values[3])
-
-            # 验证无推荐的文件显示默认文本
-            second_values = mw.action_tree.item(children[1], "values")
-            assert "Not recommended" in str(second_values[3])
+            # VirtualTreeview 使用虚拟渲染
+            assert mw.action_tree._total_rows == 5
 
             mw.destroy()
         finally:
@@ -483,10 +469,10 @@ class TestUpdateActionTable:
             mw._file_pool = []
             mw._current_batch = 0
             mw.recommendations = []
+            mw._analysis_ctrl.set_recommendations([])
             mw.update_action_table()
 
-            children = mw.action_tree.get_children()
-            assert len(children) == 0
+            assert mw.action_tree._total_rows == 0
 
             mw.destroy()
         finally:

@@ -1,9 +1,12 @@
 import os
 import stat
 import ctypes
+import logging
 from typing import Optional, Tuple
 from pathlib import Path
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class ValidationResult(Enum):
@@ -19,8 +22,8 @@ class ValidationResult(Enum):
     SYSTEM = "system"
 
 
-class FileInfo:
-    """文件信息类"""
+class ValidationFileInfo:
+    """文件信息类（验证专用）"""
     def __init__(self, path: str):
         self.path = path
         self.name = os.path.basename(path)
@@ -95,7 +98,8 @@ class FileInfo:
             
             # Unix隐藏文件检查（以.开头）
             return self.name.startswith('.')
-        except:
+        except (OSError, AttributeError, TypeError) as e:
+            logger.debug("Failed to check hidden status for '%s': %s", self.path, e)
             return False
     
     def _is_system_file(self) -> bool:
@@ -118,7 +122,8 @@ class FileInfo:
                     return True
             
             return False
-        except:
+        except (OSError, AttributeError, TypeError) as e:
+            logger.debug("Failed to check system file status for '%s': %s", self.path, e)
             return False
     
     def _is_locked(self) -> bool:
@@ -134,7 +139,8 @@ class FileInfo:
                             msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
                             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
                             return False
-                        except:
+                        except (OSError, IOError) as e:
+                            logger.debug("File '%s' is locked (Windows): %s", self.path, e)
                             return True
                     else:
                         import fcntl
@@ -142,10 +148,12 @@ class FileInfo:
                             fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                             return False
-                        except:
+                        except (OSError, IOError) as e:
+                            logger.debug("File '%s' is locked (Unix): %s", self.path, e)
                             return True
             return False
-        except:
+        except (OSError, IOError) as e:
+            logger.debug("Failed to check lock status for '%s': %s", self.path, e)
             return False
     
     def to_dict(self) -> dict:
@@ -167,6 +175,9 @@ class FileInfo:
             'permissions': self.permissions,
             'last_modified': self.last_modified
         }
+
+
+FileInfo = ValidationFileInfo
 
 
 class FileValidator:

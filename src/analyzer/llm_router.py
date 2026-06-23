@@ -7,14 +7,20 @@ v1.5.0 新增:
 - WeightedRouter: 动态权重路由（基于延迟/成功率/成本计算权重）
 - batch_chat: 批量并行请求
 - RequestCoalescer: 请求合并（相同消息的并发请求自动合并）
+
+v2.1.0 拆分:
+- CircuitBreaker → circuit_breaker.py
+- LatencyProbe, LatencySample → latency_probe.py
+- RequestCoalescer → request_coalescer.py
+- BatchRequest, BatchResult, batch_chat → batch.py
 """
 
-import hashlib
 import logging
 import os
 import random
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,6 +29,17 @@ from typing import (
 )
 from datetime import datetime, timedelta
 from openai import OpenAI
+from openai import (
+    APITimeoutError as Timeout,
+    APIConnectionError as ConnectionError,
+    AuthenticationError,
+    APIError,
+)
+
+from .circuit_breaker import CircuitBreaker
+from .latency_probe import LatencyProbe, LatencySample
+from .request_coalescer import RequestCoalescer
+from .batch import BatchRequest, BatchResult, batch_chat
 
 logger = logging.getLogger(__name__)
 
@@ -71,219 +88,6 @@ class ProviderConfig:
     max_retries: int = 2
     rate_limit_rpm: Optional[int] = None
     rate_limit_tpm: Optional[int] = None
-
-
-@dataclass
-class CircuitBreaker:
-    """断路器"""
-    name: str
-    failure_threshold: int = 3
-    recovery_timeout: int = 60  # 秒
-    failures: int = 0
-    last_failure: Optional[datetime] = None
-    state: str = "CLOSED"  # CLOSED → OPEN → HALF_OPEN
-
-    def record_failure(self):
-        """记录失败"""
-        self.failures += 1
-        self.last_failure = datetime.now()
-        if self.failures >= self.failure_threshold:
-            self.state = "OPEN"
-
-    def record_success(self):
-        """记录成功"""
-        if self.state == "HALF_OPEN":
-            self.state = "CLOSED"
-            self.failures = 0
-
-    def can_execute(self) -> bool:
-        """检查是否可以执行"""
-        if self.state == "CLOSED":
-            return True
-        if self.state == "OPEN":
-            if self.last_failure and datetime.now() - self.last_failure > timedelta(seconds=self.recovery_timeout):
-                self.state = "HALF_OPEN"
-                return True
-            return False
-        return True  # HALF_OPEN
-
-
-@dataclass
-class LatencySample:
-    """单次延迟采样"""
-    provider: str
-    latency_ms: float
-    success: bool
-    timestamp: datetime = field(default_factory=datetime.now)
-
-
-class LatencyProbe:
-    """
-    延迟探测器 —— 后台线程定期 ping 各 Provider，记录延迟。
-
-    用法::
-
-        probe = LatencyProbe(providers, interval=30, timeout=5)
-        probe.start()
-        ...
-        latencies = probe.get_latencies()  # {"deepseek": 120.5, ...}
-        probe.stop()
-
-    特性:
-    - 后台 daemon 线程，不阻塞主进程退出
-    - 滑动窗口保留最近 N 次采样
-    - 提供 P50 / P95 / 均值统计
-    - 线程安全
-    """
-
-    def __init__(
-        self,
-        providers: List[ProviderConfig],
-        interval: int = 30,
-        timeout: int = 5,
-        window_size: int = 20,
-    ):
-        self.providers = providers
-        self.interval = interval
-        self.timeout = timeout
-        self.window_size = window_size
-
-        self._samples: Dict[str, List[LatencySample]] = {}
-        self._lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-
-        for p in providers:
-            self._samples[p.name] = []
-
-    def start(self):
-        """启动后台探测线程"""
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="latency-probe"
-        )
-        self._thread.start()
-
-    def stop(self):
-        """停止探测"""
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=self.interval + 2)
-
-    def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
-
-    def _run(self):
-        while not self._stop_event.is_set():
-            self._probe_all()
-            self._stop_event.wait(self.interval)
-
-    def _probe_all(self):
-        for provider in self.providers:
-            if self._stop_event.is_set():
-                break
-            self._probe_one(provider)
-
-    def _probe_one(self, provider: ProviderConfig):
-        """对单个 Provider 发送最小请求测量延迟"""
-        latency_ms = 0.0
-        success = False
-        try:
-            api_key = provider.api_key or "no-key"
-            if provider.api_key_env and provider.api_key_env != "NO_AUTH":
-                api_key = os.environ.get(provider.api_key_env, api_key)
-                if not api_key:
-                    return
-
-            client = OpenAI(
-                base_url=provider.base_url,
-                api_key=api_key,
-                timeout=self.timeout,
-            )
-            model_id = provider.models[0].id if provider.models else "unknown"
-
-            start = time.time()
-            client.chat.completions.create(
-                model=model_id,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-            )
-            latency_ms = (time.time() - start) * 1000
-            success = True
-        except Exception as e:
-            latency_ms = (time.time() - start) * 1000 if 'start' in dir() else 0
-            logger.debug("LatencyProbe %s failed: %s", provider.name, e)
-        finally:
-            sample = LatencySample(
-                provider=provider.name,
-                latency_ms=latency_ms,
-                success=success,
-            )
-            with self._lock:
-                samples = self._samples.setdefault(provider.name, [])
-                samples.append(sample)
-                if len(samples) > self.window_size:
-                    self._samples[provider.name] = samples[-self.window_size:]
-
-    def record_external(self, provider: str, latency_ms: float, success: bool):
-        """由外部请求自动记录延迟（无需等待探测周期）"""
-        sample = LatencySample(provider=provider, latency_ms=latency_ms, success=success)
-        with self._lock:
-            samples = self._samples.setdefault(provider, [])
-            samples.append(sample)
-            if len(samples) > self.window_size:
-                self._samples[provider] = samples[-self.window_size:]
-
-    def get_latencies(self) -> Dict[str, float]:
-        """返回各 Provider 的中位延迟（ms），无数据返回 inf"""
-        result: Dict[str, float] = {}
-        with self._lock:
-            for name, samples in self._samples.items():
-                ok = [s.latency_ms for s in samples if s.success]
-                result[name] = sorted(ok)[len(ok) // 2] if ok else float('inf')
-        return result
-
-    def get_stats(self) -> Dict[str, Dict[str, float]]:
-        """返回各 Provider 的详细延迟统计"""
-        stats: Dict[str, Dict[str, float]] = {}
-        with self._lock:
-            for name, samples in self._samples.items():
-                ok = sorted(s.latency_ms for s in samples if s.success)
-                total = len(samples)
-                ok_count = len(ok)
-                if ok:
-                    p50_idx = int(ok_count * 0.5)
-                    p95_idx = min(int(ok_count * 0.95), ok_count - 1)
-                    stats[name] = {
-                        "samples": total,
-                        "success_count": ok_count,
-                        "success_rate": ok_count / total if total else 0,
-                        "avg_ms": sum(ok) / ok_count,
-                        "p50_ms": ok[p50_idx],
-                        "p95_ms": ok[p95_idx],
-                        "min_ms": ok[0],
-                        "max_ms": ok[-1],
-                    }
-                else:
-                    stats[name] = {
-                        "samples": total,
-                        "success_count": 0,
-                        "success_rate": 0,
-                        "avg_ms": float('inf'),
-                        "p50_ms": float('inf'),
-                        "p95_ms": float('inf'),
-                        "min_ms": float('inf'),
-                        "max_ms": float('inf'),
-                    }
-        return stats
-
-    def clear(self):
-        """清除所有采样数据"""
-        with self._lock:
-            for name in self._samples:
-                self._samples[name] = []
 
 
 class LLMRouter:
@@ -491,8 +295,12 @@ class LLMRouter:
         # Provider健康状态
         self._provider_status: Dict[str, ProviderStatus] = {}
         
-        # 请求历史（用于统计）
-        self._request_history: List[Dict] = []
+        # 请求历史（用于统计）—— deque(maxlen) 自动淘汰旧记录，防止内存泄漏
+        self._request_history: deque = deque(maxlen=1000)
+        
+        # Provider → OpenAI 客户端缓存（避免重复创建对象）
+        self._client_cache: Dict[str, OpenAI] = {}
+        self._client_lock: threading.Lock = threading.Lock()
         
         # 延迟探测
         self._latency_probe: Optional[LatencyProbe] = None
@@ -523,16 +331,24 @@ class LLMRouter:
                     provider.api_key = os.environ.get(provider.api_key_env)
 
     def _get_client(self, provider: ProviderConfig) -> OpenAI:
-        """获取OpenAI客户端"""
+        """获取OpenAI客户端（带缓存，避免重复创建连接对象）"""
+        cache_key = provider.name
+        with self._client_lock:
+            if cache_key in self._client_cache:
+                return self._client_cache[cache_key]
+
         api_key = provider.api_key or "no-key"
         if provider.api_key_env and provider.api_key_env != "NO_AUTH":
             api_key = os.environ.get(provider.api_key_env, api_key)
         
-        return OpenAI(
+        client = OpenAI(
             base_url=provider.base_url,
             api_key=api_key,
             timeout=provider.timeout
         )
+        with self._client_lock:
+            self._client_cache[cache_key] = client
+        return client
 
     def _find_model(self, model_id: str) -> Optional[tuple[ProviderConfig, ModelConfig]]:
         """查找模型配置"""
@@ -695,7 +511,34 @@ class LLMRouter:
                     
                     return response
                     
-                except Exception as e:
+                except AuthenticationError as e:
+                    # 不可重试异常：认证失败，记录错误并继续到下一个Provider
+                    errors.append(f"{provider.name}: {str(e)}")
+                    
+                    # 记录失败
+                    if breaker:
+                        breaker.record_failure()
+                    
+                    # 记录到延迟探测器
+                    if self._latency_probe:
+                        self._latency_probe.record_external(
+                            provider.name, 0, False
+                        )
+                    
+                    # 记录历史
+                    self._request_history.append({
+                        "provider": provider.name,
+                        "model": model_id,
+                        "success": False,
+                        "error": str(e),
+                        "timestamp": datetime.now()
+                    })
+                    
+                    # 认证错误不重试，直接跳到下一个Provider
+                    break
+                    
+                except (Timeout, ConnectionError) as e:
+                    # 可重试异常：超时/连接错误
                     errors.append(f"{provider.name}: {str(e)}")
                     
                     # 记录失败
@@ -719,7 +562,74 @@ class LLMRouter:
                     
                     # 如果是最后一次尝试，继续到下一个Provider
                     if attempt < self.max_retries:
-                        time.sleep(1 * (attempt + 1))  # 指数退避
+                        # 指数退避 + random jitter 防止 thundering herd
+                        base_delay = 1 * (attempt + 1)
+                        jitter = random.uniform(0, base_delay * 0.5)
+                        delay = base_delay + jitter
+                        print(f"Attempt {attempt + 1} failed (retryable), retrying in {delay:.1f}s: {e}")
+                        time.sleep(delay)
+                        
+                except APIError as e:
+                    # API 错误：检查是否可重试
+                    errors.append(f"{provider.name}: {str(e)}")
+                    
+                    # 记录失败
+                    if breaker:
+                        breaker.record_failure()
+                    
+                    # 记录到延迟探测器
+                    if self._latency_probe:
+                        self._latency_probe.record_external(
+                            provider.name, 0, False
+                        )
+                    
+                    # 记录历史
+                    self._request_history.append({
+                        "provider": provider.name,
+                        "model": model_id,
+                        "success": False,
+                        "error": str(e),
+                        "timestamp": datetime.now()
+                    })
+                    
+                    # 某些 API 错误可能可重试（如 429 限流）
+                    if hasattr(e, 'status_code') and e.status_code == 429:
+                        if attempt < self.max_retries:
+                            # 指数退避 + random jitter
+                            base_delay = 1 * (attempt + 1)
+                            jitter = random.uniform(0, base_delay * 0.5)
+                            delay = base_delay + jitter
+                            print(f"Attempt {attempt + 1} failed (rate limited), retrying in {delay:.1f}s: {e}")
+                            time.sleep(delay)
+                    else:
+                        # 其他 API 错误不重试，继续到下一个Provider
+                        break
+                        
+                except Exception as e:
+                    # 未知异常：记录错误并继续到下一个Provider
+                    errors.append(f"{provider.name}: {str(e)}")
+                    
+                    # 记录失败
+                    if breaker:
+                        breaker.record_failure()
+                    
+                    # 记录到延迟探测器
+                    if self._latency_probe:
+                        self._latency_probe.record_external(
+                            provider.name, 0, False
+                        )
+                    
+                    # 记录历史
+                    self._request_history.append({
+                        "provider": provider.name,
+                        "model": model_id,
+                        "success": False,
+                        "error": str(e),
+                        "timestamp": datetime.now()
+                    })
+                    
+                    # 未知异常不重试，继续到下一个Provider
+                    break
         
         raise RuntimeError(f"All providers failed: {'; '.join(errors)}")
 
@@ -783,7 +693,21 @@ class LLMRouter:
                     
                 return  # 成功，退出
                 
+            except AuthenticationError as e:
+                # 不可重试异常：认证失败，继续到下一个Provider
+                logger.warning(f"Provider {provider.name} authentication failed: {e}")
+                continue
+            except (Timeout, ConnectionError) as e:
+                # 可重试异常：超时/连接错误，继续到下一个Provider
+                logger.warning(f"Provider {provider.name} connection failed: {e}")
+                continue
+            except APIError as e:
+                # API 错误：继续到下一个Provider
+                logger.warning(f"Provider {provider.name} API error: {e}")
+                continue
             except Exception as e:
+                # 未知异常：继续到下一个Provider
+                logger.warning(f"Provider {provider.name} unknown error: {e}")
                 continue
         
         raise RuntimeError("All providers failed for streaming")
@@ -831,13 +755,14 @@ class LLMRouter:
         return status
 
     def get_stats(self) -> Dict:
-        """获取统计信息"""
-        total = len(self._request_history)
-        successful = sum(1 for r in self._request_history if r["success"])
+        """获取统计信息（_request_history 为 deque，len/迭代/列表推导均兼容）"""
+        history = list(self._request_history)  # snapshot 防止迭代时并发修改
+        total = len(history)
+        successful = sum(1 for r in history if r["success"])
         failed = total - successful
         
         avg_latency = 0
-        latencies = [r["latency"] for r in self._request_history if r.get("latency")]
+        latencies = [r["latency"] for r in history if r.get("latency")]
         if latencies:
             avg_latency = sum(latencies) / len(latencies)
         
@@ -847,6 +772,7 @@ class LLMRouter:
             "failed": failed,
             "success_rate": successful / total if total > 0 else 0,
             "average_latency": avg_latency,
+            "max_history_size": self._request_history.maxlen,
             "providers": self.get_provider_status()
         }
 
@@ -872,11 +798,15 @@ class LLMRouter:
         self.providers = [p for p in self.providers if p.name != name]
         self._circuit_breakers.pop(name, None)
         self._provider_status.pop(name, None)
+        with self._client_lock:
+            self._client_cache.pop(name, None)
 
     def shutdown(self):
         """停止后台线程，释放资源"""
         if self._latency_probe:
             self._latency_probe.stop()
+        with self._client_lock:
+            self._client_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -1048,174 +978,6 @@ class WeightedRouter(LLMRouter):
             c.name: round(s / total, 4)
             for c, s in zip(candidates, scores)
         }
-
-
-# ---------------------------------------------------------------------------
-# v1.5.0 — 批量请求 + 请求合并
-# ---------------------------------------------------------------------------
-
-@dataclass
-class BatchRequest:
-    """批量请求中的单项"""
-    messages: List[Dict[str, str]]
-    model: Optional[str] = None
-    temperature: float = 0.7
-    max_tokens: Optional[int] = None
-    kwargs: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class BatchResult:
-    """批量请求的单项结果"""
-    index: int
-    success: bool
-    response: Any = None
-    error: Optional[str] = None
-    provider: Optional[str] = None
-    latency: float = 0.0
-
-
-class RequestCoalescer:
-    """
-    请求合并器 —— 相同内容的并发请求自动合并为一次 API 调用。
-
-    原理:
-    1. 将 (messages, model, temperature, max_tokens) 哈希为请求 key
-    2. 首个请求实际执行，后续相同 key 的请求等待同一 Future
-    3. Future 完成后所有等待者共享结果
-
-    用法::
-
-        coalescer = RequestCoalescer(router)
-        # 两个并发的相同请求只会实际调用一次 API
-        result1, result2 = await asyncio.gather(
-            coalescer.chat(messages=[...]),
-            coalescer.chat(messages=[...]),
-        )
-
-    注意: 当前实现是同步阻塞版本，使用 threading.Event 实现等待。
-    """
-
-    def __init__(self, router: LLMRouter):
-        self._router = router
-        self._inflight: Dict[str, Future] = {}
-        self._lock = threading.Lock()
-
-    def _make_key(self, **kwargs) -> str:
-        parts = [
-            str(kwargs.get("messages", "")),
-            str(kwargs.get("model", "")),
-            str(kwargs.get("temperature", 0.7)),
-            str(kwargs.get("max_tokens", "")),
-        ]
-        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
-
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        model: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
-        **kwargs,
-    ) -> Any:
-        """发送请求（自动合并相同请求）"""
-        key = self._make_key(
-            messages=messages, model=model,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-
-        with self._lock:
-            if key in self._inflight:
-                future = self._inflight[key]
-                return future.result()
-
-            future: Future = Future()
-            self._inflight[key] = future
-
-        try:
-            result = self._router.chat(
-                messages=messages, model=model,
-                temperature=temperature, max_tokens=max_tokens,
-                **kwargs,
-            )
-            future.set_result(result)
-            return result
-        except Exception as e:
-            future.set_exception(e)
-            raise
-        finally:
-            with self._lock:
-                self._inflight.pop(key, None)
-
-
-def batch_chat(
-    router: LLMRouter,
-    requests: List[BatchRequest],
-    max_workers: int = 4,
-    coalesce: bool = False,
-) -> List[BatchResult]:
-    """
-    批量并行发送聊天请求。
-
-    Args:
-        router: LLM路由器实例
-        requests: 批量请求列表
-        max_workers: 最大并行数
-        coalesce: 是否启用请求合并
-
-    Returns:
-        与输入等长的结果列表（保持顺序）
-
-    用法::
-
-        from src.analyzer.llm_router import batch_chat, BatchRequest
-
-        results = batch_chat(router, [
-            BatchRequest(messages=[{"role": "user", "content": "你好"}]),
-            BatchRequest(messages=[{"role": "user", "content": "Hello"}]),
-        ])
-        for r in results:
-            if r.success:
-                print(r.response.choices[0].message.content)
-    """
-    coalescer = RequestCoalescer(router) if coalesce else None
-    results: List[BatchResult] = [None] * len(requests)  # type: ignore
-
-    def _execute(idx: int, req: BatchRequest) -> BatchResult:
-        start = time.time()
-        try:
-            if coalescer:
-                response = coalescer.chat(
-                    messages=req.messages, model=req.model,
-                    temperature=req.temperature, max_tokens=req.max_tokens,
-                    **req.kwargs,
-                )
-            else:
-                response = router.chat(
-                    messages=req.messages, model=req.model,
-                    temperature=req.temperature, max_tokens=req.max_tokens,
-                    **req.kwargs,
-                )
-            latency = time.time() - start
-            return BatchResult(
-                index=idx, success=True, response=response, latency=latency,
-            )
-        except Exception as e:
-            latency = time.time() - start
-            return BatchResult(
-                index=idx, success=False, error=str(e), latency=latency,
-            )
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_execute, i, req): i
-            for i, req in enumerate(requests)
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            results[idx] = future.result()
-
-    return results
 
 
 # 预设配置

@@ -6,6 +6,7 @@ import hashlib
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Generator
 from datetime import datetime, timedelta
@@ -53,6 +54,7 @@ class WizTreeScanner(ScannerInterface):
         self._progress_manager: Optional[ScanProgress] = None
         self._process: Optional[subprocess.Popen] = None
         self._cancelled = False
+        self._csv_path: Optional[str] = None
     
     def scan(self, target: str, options: ScanOptions) -> ScanResult:
         """
@@ -91,20 +93,20 @@ class WizTreeScanner(ScannerInterface):
             
             # 创建临时CSV文件
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_path = os.path.join(
+            self._csv_path = os.path.join(
                 tempfile.gettempdir(), f"wiztree_{timestamp}.csv"
             )
             
             # 执行扫描
             scan_start_time = datetime.now()
-            self._execute_scan(cmd, csv_path)
+            self._execute_scan(cmd, self._csv_path)
             
             # 检查是否被取消
             if self._cancelled:
                 raise InterruptedError("扫描被取消")
             
             # 解析CSV结果
-            files = self._parse_csv(csv_path)
+            files = self._parse_csv(self._csv_path)
             
             # 计算扫描时长
             scan_duration = (datetime.now() - scan_start_time).total_seconds()
@@ -125,11 +127,11 @@ class WizTreeScanner(ScannerInterface):
             raise
         finally:
             # 清理临时文件
-            if 'csv_path' in locals() and os.path.exists(csv_path):
+            if self._csv_path and os.path.exists(self._csv_path):
                 try:
-                    os.remove(csv_path)
+                    os.remove(self._csv_path)
                 except OSError:
-                    logger.debug("Failed to remove temp CSV: %s", csv_path)
+                    logger.debug("Failed to remove temp CSV: %s", self._csv_path)
     
     def cancel(self):
         """取消扫描"""
@@ -138,15 +140,23 @@ class WizTreeScanner(ScannerInterface):
             self._progress_manager.cancel()
         
         # 终止WizTree进程
-        if self._process:
+        process = self._process
+        self._process = None  # 防止重复终止
+        
+        if process:
             try:
-                self._process.terminate()
-                self._process.wait(timeout=5)
-            except Exception:
+                process.terminate()
                 try:
-                    self._process.kill()
-                except Exception:
-                    logger.warning("WizTree process kill failed", exc_info=True)
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning("Process terminate timed out, using kill")
+                    process.kill()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        logger.warning("Process wait timed out after kill")
+            except Exception:
+                logger.warning("WizTree process termination failed", exc_info=True)
     
     def _build_command(self, target: str, options: ScanOptions) -> List[str]:
         """
@@ -211,12 +221,18 @@ class WizTreeScanner(ScannerInterface):
                 raise RuntimeError(f"CSV文件未生成: {csv_path}")
             
         except subprocess.TimeoutExpired:
-            # 超时处理
+            # 超时处理：确保完整清理进程
             if self._process:
                 self._process.kill()
+                try:
+                    self._process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning("Process wait timed out after kill")
             raise TimeoutError(f"扫描超时（超过{self._timeout}秒）")
         except Exception as e:
             raise RuntimeError(f"执行WizTree扫描时出错: {e}")
+        finally:
+            self._process = None
     
     def _parse_csv(self, csv_path: str) -> List[FileInfo]:
         """
@@ -460,11 +476,13 @@ class WizTreeScanner(ScannerInterface):
 
     # ----------------------------------------------------------------
     # Stage 3: 扫描结果缓存
+    # Stage 6: 添加线程安全机制
     # ----------------------------------------------------------------
 
     _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".wiztree-cli-agent")
     _CACHE_FILE = os.path.join(_CACHE_DIR, "scan_cache.json")
     _CACHE_TTL = timedelta(hours=1)
+    _cache_lock = threading.Lock()
 
     def scan_with_cache(self, target: str, options: ScanOptions) -> ScanResult:
         """
@@ -478,7 +496,11 @@ class WizTreeScanner(ScannerInterface):
             ScanResult: 扫描结果
         """
         cache_key = self._get_cache_key(target, options)
-        cached = self._load_cache(cache_key)
+        
+        # Stage 6: 使用锁保护缓存加载
+        with self._cache_lock:
+            cached = self._load_cache(cache_key)
+        
         if cached is not None:
             if self._progress_callback:
                 try:
@@ -494,7 +516,11 @@ class WizTreeScanner(ScannerInterface):
             return cached
 
         result = self.scan(target, options)
-        self._save_cache(cache_key, result)
+        
+        # Stage 6: 使用锁保护缓存保存
+        with self._cache_lock:
+            self._save_cache(cache_key, result)
+        
         return result
 
     def clear_cache(self) -> bool:
@@ -504,12 +530,14 @@ class WizTreeScanner(ScannerInterface):
         Returns:
             bool: 是否成功清除
         """
-        try:
-            if os.path.exists(self._CACHE_FILE):
-                os.remove(self._CACHE_FILE)
-            return True
-        except OSError:
-            return False
+        # Stage 6: 使用锁保护缓存清除
+        with self._cache_lock:
+            try:
+                if os.path.exists(self._CACHE_FILE):
+                    os.remove(self._CACHE_FILE)
+                return True
+            except OSError:
+                return False
 
     def _get_cache_key(self, target: str, options: ScanOptions) -> str:
         """生成缓存键（路径 + 参数的 SHA-256）"""
@@ -533,28 +561,56 @@ class WizTreeScanner(ScannerInterface):
             if datetime.now() - cached_at > self._CACHE_TTL:
                 return None
             return self._deserialize_scan_result(entry["result"])
-        except (json.JSONDecodeError, OSError, KeyError, ValueError):
+        except json.JSONDecodeError:
+            logger.warning("Corrupted cache JSON in %s", self._CACHE_FILE, exc_info=True)
+            return None
+        except (OSError, KeyError, ValueError):
             return None
 
     def _save_cache(self, cache_key: str, result: ScanResult) -> None:
-        """将 ScanResult 保存到缓存文件"""
-        try:
-            os.makedirs(self._CACHE_DIR, exist_ok=True)
-            data: Dict[str, Any] = {}
-            if os.path.exists(self._CACHE_FILE):
+        """将 ScanResult 保存到缓存文件（原子写入 + 重试）"""
+        max_retries = 3
+        retry_delay = 0.1  # 初始延迟秒
+        
+        for attempt in range(max_retries):
+            try:
+                os.makedirs(self._CACHE_DIR, exist_ok=True)
+                data: Dict[str, Any] = {}
+                if os.path.exists(self._CACHE_FILE):
+                    try:
+                        with open(self._CACHE_FILE, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except (json.JSONDecodeError, OSError):
+                        data = {}
+                data[cache_key] = {
+                    "cached_at": datetime.now().isoformat(),
+                    "result": self._serialize_scan_result(result),
+                }
+                
+                # 原子写入：写入临时文件然后替换
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=self._CACHE_DIR, suffix=".tmp", prefix="scan_cache_"
+                )
                 try:
-                    with open(self._CACHE_FILE, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except (json.JSONDecodeError, OSError):
-                    data = {}
-            data[cache_key] = {
-                "cached_at": datetime.now().isoformat(),
-                "result": self._serialize_scan_result(result),
-            }
-            with open(self._CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-        except OSError:
-            logger.warning("Failed to save scan cache to %s", self._CACHE_FILE, exc_info=True)
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False)
+                    # 原子替换
+                    os.replace(tmp_path, self._CACHE_FILE)
+                except:
+                    # 清理临时文件
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+                return  # 成功则返回
+            except OSError as e:
+                if attempt < max_retries - 1:
+                    logger.debug("Cache save attempt %d failed: %s, retrying...", attempt + 1, e)
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                else:
+                    logger.warning("Failed to save scan cache to %s after %d attempts", self._CACHE_FILE, max_retries, exc_info=True)
 
     @staticmethod
     def _serialize_scan_result(result: ScanResult) -> Dict[str, Any]:

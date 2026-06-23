@@ -2,10 +2,13 @@ import sqlite3
 import json
 import os
 import shutil
+import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Callable, TypeVar
 from pathlib import Path
 from contextlib import contextmanager
+
+T = TypeVar('T')
 
 
 def _detect_user() -> str:
@@ -39,6 +42,10 @@ class AuditLogger:
         """初始化数据库表结构"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            
+            # 设置 PRAGMA 以提高并发性能
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
             
             # 创建删除记录表
             cursor.execute('''
@@ -134,12 +141,40 @@ class AuditLogger:
     @contextmanager
     def _get_connection(self):
         """获取数据库连接上下文管理器"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row  # 返回字典格式结果
         try:
             yield conn
         finally:
             conn.close()
+    
+    def _execute_with_retry(self, operation: Callable[..., T], max_retries: int = 3, base_delay: float = 0.1) -> T:
+        """
+        执行数据库操作，遇到 database locked 错误时指数退避重试
+        
+        Args:
+            operation: 要执行的数据库操作函数
+            max_retries: 最大重试次数
+            base_delay: 基础延迟时间（秒）
+            
+        Returns:
+            操作结果
+            
+        Raises:
+            sqlite3.OperationalError: 超过最大重试次数后仍然失败
+        """
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                return operation()
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries:
+                    last_error = e
+                    delay = base_delay * (2 ** attempt)  # 指数退避
+                    time.sleep(delay)
+                else:
+                    raise
+        raise last_error  # type: ignore
     
     def log_deletion(self, file_path: str, file_name: str, file_size: Optional[int] = None,
                     file_type: Optional[str] = None, parent_directory: Optional[str] = None,
@@ -165,18 +200,21 @@ class AuditLogger:
         timestamp = datetime.now().isoformat()
         metadata_json = json.dumps(metadata) if metadata else None
         
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO deletion_records 
-                (timestamp, file_path, file_name, file_size, file_type, 
-                 parent_directory, deletion_status, error_message, session_id, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (timestamp, file_path, file_name, file_size, file_type,
-                  parent_directory, deletion_status, error_message, session_id, metadata_json))
-            
-            conn.commit()
-            return cursor.lastrowid
+        def _insert():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO deletion_records 
+                    (timestamp, file_path, file_name, file_size, file_type, 
+                     parent_directory, deletion_status, error_message, session_id, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (timestamp, file_path, file_name, file_size, file_type,
+                      parent_directory, deletion_status, error_message, session_id, metadata_json))
+                
+                conn.commit()
+                return cursor.lastrowid
+        
+        return self._execute_with_retry(_insert)
     
     def log_operation(self, operation_type: str, description: str, 
                      file_count: int = 0, total_size: int = 0,
@@ -198,16 +236,19 @@ class AuditLogger:
         timestamp = datetime.now().isoformat()
         details_json = json.dumps(details) if details else None
         
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO operation_logs 
-                (timestamp, operation_type, description, file_count, total_size, status, details)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (timestamp, operation_type, description, file_count, total_size, status, details_json))
-            
-            conn.commit()
-            return cursor.lastrowid
+        def _insert():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO operation_logs 
+                    (timestamp, operation_type, description, file_count, total_size, status, details)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (timestamp, operation_type, description, file_count, total_size, status, details_json))
+                
+                conn.commit()
+                return cursor.lastrowid
+        
+        return self._execute_with_retry(_insert)
     
     def query_deletions(self, start_date: Optional[str] = None, end_date: Optional[str] = None,
                        status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
@@ -391,26 +432,29 @@ class AuditLogger:
         cutoff_date = cutoff_date.replace(day=cutoff_date.day - days)
         cutoff_date_str = cutoff_date.isoformat()
         
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 删除旧记录
-            cursor.execute('''
-                DELETE FROM deletion_records 
-                WHERE timestamp < ?
-            ''', (cutoff_date_str,))
-            
-            deleted_count = cursor.rowcount
-            
-            # 删除旧操作日志
-            cursor.execute('''
-                DELETE FROM operation_logs 
-                WHERE timestamp < ?
-            ''', (cutoff_date_str,))
-            
-            conn.commit()
-            
-            return deleted_count
+        def _clear():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 删除旧记录
+                cursor.execute('''
+                    DELETE FROM deletion_records 
+                    WHERE timestamp < ?
+                ''', (cutoff_date_str,))
+                
+                deleted_count = cursor.rowcount
+                
+                # 删除旧操作日志
+                cursor.execute('''
+                    DELETE FROM operation_logs 
+                    WHERE timestamp < ?
+                ''', (cutoff_date_str,))
+                
+                conn.commit()
+                
+                return deleted_count
+        
+        return self._execute_with_retry(_clear)
     
     def get_recent_operations(self, limit: int = 20) -> List[Dict[str, Any]]:
         """
@@ -485,18 +529,21 @@ class AuditLogger:
         metadata_json = json.dumps(metadata) if metadata else None
         user_str = user if user else _detect_user()
         
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                '''
-                INSERT INTO audit_log
-                    (timestamp, action_type, target_path, status, metadata, user)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ''',
-                (timestamp, action_type, target_path, status, metadata_json, user_str),
-            )
-            conn.commit()
-            return int(cursor.lastrowid or 0)
+        def _insert():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO audit_log
+                        (timestamp, action_type, target_path, status, metadata, user)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ''',
+                    (timestamp, action_type, target_path, status, metadata_json, user_str),
+                )
+                conn.commit()
+                return int(cursor.lastrowid or 0)
+        
+        return self._execute_with_retry(_insert)
     
     def delete(self, action_id: int) -> bool:
         """
@@ -505,14 +552,17 @@ class AuditLogger:
         Returns:
             是否成功删除（id 不存在时返回 False）
         """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM audit_log WHERE id = ?",
-                (action_id,),
-            )
-            conn.commit()
-            return cursor.rowcount > 0
+        def _delete():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM audit_log WHERE id = ?",
+                    (action_id,),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        
+        return self._execute_with_retry(_delete)
     
     def list_recent(
         self,
@@ -582,17 +632,20 @@ class AuditLogger:
         if deleted_at is None:
             deleted_at = datetime.now().isoformat()
         
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                '''
-                INSERT INTO trash (original_path, deleted_path, deleted_at, size)
-                VALUES (?, ?, ?, ?)
-                ''',
-                (original_path, deleted_path, deleted_at, size),
-            )
-            conn.commit()
-            return int(cursor.lastrowid or 0)
+        def _insert():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO trash (original_path, deleted_path, deleted_at, size)
+                    VALUES (?, ?, ?, ?)
+                    ''',
+                    (original_path, deleted_path, deleted_at, size),
+                )
+                conn.commit()
+                return int(cursor.lastrowid or 0)
+        
+        return self._execute_with_retry(_insert)
     
     def list_trash(
         self,
@@ -632,63 +685,66 @@ class AuditLogger:
         Returns:
             是否成功还原
         """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, action_type, target_path, status, metadata "
-                "FROM audit_log WHERE id = ?",
-                (action_id,),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                return False
-            record = dict(row)
-            action_type = record.get("action_type")
-            target_path = record.get("target_path")
-            meta_str = record.get("metadata")
-            
-            meta: Dict[str, Any] = {}
-            if meta_str:
-                try:
-                    meta = json.loads(meta_str)
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    meta = {}
-            
-            success = False
-            try:
-                if action_type == "file_delete":
-                    success = self._restore_file_delete(target_path, meta)
-                elif action_type == "file_move":
-                    success = self._restore_file_move(target_path, meta)
-                else:
-                    # scan / restore / 未知类型 → 不支持还原
-                    success = False
-            except Exception:
-                # 任何 IO 异常都视为还原失败
-                success = False
-            
-            if success:
-                # 写一条新的 audit log 记录（spec: "写入新的 audit log 记录 restore 操作"）
-                timestamp = datetime.now().isoformat()
-                meta_out = json.dumps({"restored_from": action_id, "original": meta})
+        def _restore():
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
                 cursor.execute(
-                    '''
-                    INSERT INTO audit_log
-                        (timestamp, action_type, target_path, status, metadata, user)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''',
-                    (
-                        timestamp,
-                        "restore",
-                        target_path,
-                        "success",
-                        meta_out,
-                        _detect_user(),
-                    ),
+                    "SELECT id, action_type, target_path, status, metadata "
+                    "FROM audit_log WHERE id = ?",
+                    (action_id,),
                 )
-            
-            conn.commit()
-            return success
+                row = cursor.fetchone()
+                if row is None:
+                    return False
+                record = dict(row)
+                action_type = record.get("action_type")
+                target_path = record.get("target_path")
+                meta_str = record.get("metadata")
+                
+                meta: Dict[str, Any] = {}
+                if meta_str:
+                    try:
+                        meta = json.loads(meta_str)
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        meta = {}
+                
+                success = False
+                try:
+                    if action_type == "file_delete":
+                        success = self._restore_file_delete(target_path, meta)
+                    elif action_type == "file_move":
+                        success = self._restore_file_move(target_path, meta)
+                    else:
+                        # scan / restore / 未知类型 → 不支持还原
+                        success = False
+                except Exception:
+                    # 任何 IO 异常都视为还原失败
+                    success = False
+                
+                if success:
+                    # 写一条新的 audit log 记录（spec: "写入新的 audit log 记录 restore 操作"）
+                    timestamp = datetime.now().isoformat()
+                    meta_out = json.dumps({"restored_from": action_id, "original": meta})
+                    cursor.execute(
+                        '''
+                        INSERT INTO audit_log
+                            (timestamp, action_type, target_path, status, metadata, user)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ''',
+                        (
+                            timestamp,
+                            "restore",
+                            target_path,
+                            "success",
+                            meta_out,
+                            _detect_user(),
+                        ),
+                    )
+                
+                conn.commit()
+                return success
+        
+        return self._execute_with_retry(_restore)
     
     def _restore_file_delete(
         self,

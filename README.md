@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-1.5.0-blue.svg" alt="Version 1.5.0"/></a>
+  <a href="#"><img src="https://img.shields.io/badge/version-2.1.0-blue.svg" alt="Version 2.1.0"/></a>
   <a href="#"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+"/></a>
   <a href="#"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License"/></a>
   <a href="#"><img src="https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-lightgrey.svg" alt="Platform"/></a>
@@ -163,9 +163,9 @@ Pre-built binaries are available on the [Releases](https://github.com/youruserna
 
 | Package | Description |
 |---------|-------------|
-| `WizTreeCLIAgent-v1.5.0-win64.zip` | Windows 64-bit portable executable |
-| `WizTreeCLIAgent-v1.5.0-win64-setup.exe` | Windows installer |
-| `WizTreeCLIAgent-v1.5.0-source.zip` | Source code archive |
+| `WizTreeCLIAgent-v2.1.0-win64.zip` | Windows 64-bit portable executable |
+| `WizTreeCLIAgent-v2.1.0-win64-setup.exe` | Windows installer |
+| `WizTreeCLIAgent-v2.1.0-source.zip` | Source code archive |
 
 > **Note**: The executable is built with PyInstaller and includes all dependencies. No additional runtime required.
 
@@ -447,6 +447,7 @@ python tests/demo_router.py
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **2.1.0** | 2026-06-23 | Bug fixes (app.py/cli.py), FileInfo naming resolution, llm_router.py module split (CircuitBreaker/LatencyProbe/RequestCoalescer/Batch), version unification |
 | **1.5.0** | 2026-06-04 | LatencyProbe, WeightedRouter, batch_chat, RequestCoalescer, CLI --quiet/--json/--batch/--batch-file, exit codes, JSON/CSV export, 400+ tests |
 | **1.4.0** | 2026-06-03 | Virtual scrolling, `__slots__` memory optimization, scan cache (1h TTL), streaming CSV parser |
 | **1.3.0** | 2026-06-02 | Skeleton screen, theme switching callbacks, ttk style integration |

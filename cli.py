@@ -381,6 +381,7 @@ def main() -> int:
             # 默认尝试GUI模式
             try:
                 from src.ui import MainWindow
+                from app import WizTreeAgentApp
                 app = WizTreeAgentApp()
                 app.initialize()
                 app.ui = MainWindow()

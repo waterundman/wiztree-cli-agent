@@ -440,7 +440,7 @@ class TestVersionContractV130:
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        assert mod.__version__ == "1.7.3"
+        assert mod.__version__ == "2.1.0"
 
     def test_version_string_format(self):
         spec = importlib.util.spec_from_file_location(
